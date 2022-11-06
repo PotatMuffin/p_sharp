@@ -614,7 +614,17 @@ class Interpreter:
 
     def visit_NumNode(self, node:NumNode):
         res = RunTimeResult()
-        return res.success(Number(node))
+        node = Number(node)
+        
+        if node.token.type == TT_INT:
+            if len(node.token.value) > 1 and node.token.value[0] == "0":
+                return res.failure(InvalidSyntaxError(
+                    node.token.pos_start.fn, node.token.pos_start.text,
+                    "Leading zeros in integers are not permitted",
+                    node.token.pos_start.idx, node.token.pos_start.idx
+                ))
+
+        return res.success(node)
     
     def visit_UnaryOpNode(self, node:UnaryOpNode):
         res = RunTimeResult()
