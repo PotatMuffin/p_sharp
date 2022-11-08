@@ -1,5 +1,6 @@
 from __future__ import annotations
 from arrows import add_arrows
+from enum import Enum
 import string
 
 #############################
@@ -61,12 +62,23 @@ class SymbolTable:
             value = self.parent.symbols.get(variable, None)
         return value
     
-    def add_keywords(self, kw:list):
+    def add_keywords(self, *kw):
         for keyword in kw:
             self.keywords.append(keyword)
 
     def assign(self, var_name, value):
         self.symbols[var_name] = value
+
+#############################
+# State
+#############################
+
+class states(Enum):
+    RUNNING = 'running'
+    FALSEIF = 'falseif'
+    DEFFUNC = 'deffunc'
+
+state = states.RUNNING
 
 #############################
 # Position
@@ -271,7 +283,7 @@ class VarAssignNode:
         self.value = value
 
     def __repr__(self) -> str:
-        return f"{self.var_name} = {self.value}"
+        return f"({self.var_name} = {self.value})"
 
 class VarNode:
     def __init__(self, var:Token) -> None:
@@ -280,6 +292,26 @@ class VarNode:
     def __repr__(self) -> str:
         return f"{self.var}"
 
+class IfNode:
+    def __init__(self, condition) -> None:
+        self.condition = condition
+
+    def __repr__(self) -> str:
+        return f"if {self.condition}"
+
+class FiNode:
+    def __init__(self, token) -> None:
+        self.token = token
+    
+    def __repr__(self) -> str:
+        return f"{self.token}"
+
+class ElseNode:
+    def __init__(self, token) -> None:
+        self.token = token
+    
+    def __repr__(self) -> str:
+        return f"{self.token}"
 #############################
 # ParseResult
 #############################
@@ -321,7 +353,7 @@ class Parser:
         return self.current_token
 
     def parse(self):
-        result = self.expr()
+        result = self.fi_expr()
         if not result.error and self.current_token.type != TT_EOL:
             return result.failure(InvalidSyntaxError(
                 self.current_token.pos_start.fn, self.current_token.pos_start.text,
@@ -329,6 +361,15 @@ class Parser:
                 self.current_token.pos_start.idx, self.current_token.pos_end.idx
             ))
         return result
+
+    def if_expr(self):
+        res = ParseResult()
+
+        self.advance()
+        condition = res.register(self.expr())
+        if res.error: return res
+    
+        return res.success(IfNode(condition))
 
     def atom(self):
         res = ParseResult()
@@ -355,6 +396,13 @@ class Parser:
 					"Expected ')'", 
                     self.current_token.pos_start.idx, self.current_token.pos_end.idx
 				))
+
+        if self.current_token.matches(TT_KEYWORD, 'if'):
+            if_expr = res.register(self.if_expr())
+            if res.error: return res
+
+            return res.success(if_expr)
+
         return res.failure(InvalidSyntaxError(
             self.current_token.pos_start.fn, self.current_token.pos_start.text,
             "Expected int, float, '+', '-', Identifier or '('",
@@ -426,6 +474,26 @@ class Parser:
 
         node = res.register(self.Bin_Op(self.comp_expr, ((TT_KEYWORD, 'and'), (TT_KEYWORD, 'or'))))
         if res.error: return res
+        return res.success(node)
+
+    def fi_expr(self):
+        res = ParseResult()
+
+        if self.current_token.matches(TT_KEYWORD, 'fi'):
+            token = self.current_token
+            self.advance()
+
+            return res.success(FiNode(token))
+
+        if self.current_token.matches(TT_KEYWORD, 'else'):
+            token = self.current_token
+            self.advance()
+
+            return res.success(ElseNode(token))
+
+        node = res.register(self.expr())
+        if res.error: return res
+
         return res.success(node)
 
     def Bin_Op(self, function, operators, function2=None):
@@ -571,6 +639,10 @@ class Number:
         res = RunTimeResult()
         return res.success(Number(Token(type=TT_INT, value="1" if int(self.token.value) <= 0 else "0", pos_start=self.token.pos_start, pos_end=self.token.pos_end)))
 
+    def is_true(self):
+        res = RunTimeResult()
+        return int(self.token.value) > 0 
+
     def __repr__(self) -> str:
         return f"{self.token}"
 
@@ -583,9 +655,47 @@ class Interpreter:
         raise AttributeError(f"no visit_{type(node).__name__} method found")
 
     def visit(self, node):
+        res = RunTimeResult()
         method_name = f"visit_{type(node).__name__}"
         method = getattr(self, method_name, self.no_visit_method)
+
+        if state == states.FALSEIF:
+            if type(node) in (FiNode, ElseNode):
+                return method(node)
+            return res.success(None)
+
         return method(node)
+    
+    def visit_ElseNode(self, node:ElseNode):
+        res = RunTimeResult()
+        global state
+        if state == states.RUNNING:
+            state = states.FALSEIF
+        elif state == states.FALSEIF:
+            state = states.RUNNING
+        
+        return res.success(node)
+
+    def visit_FiNode(self, node:FiNode):
+        res = RunTimeResult()
+        global state
+        state = states.RUNNING
+
+        return res.success(node)
+
+    def visit_IfNode(self, node:IfNode):
+        res = RunTimeResult()
+        global state
+
+        condition:Number = res.register(self.visit(node.condition))
+        if res.error: return res
+
+        if condition.is_true(): 
+            state = states.RUNNING
+        else: 
+            state = states.FALSEIF
+        
+        return res.success(condition)
 
     def visit_VarNode(self, node:VarNode):
         res = RunTimeResult()
@@ -674,7 +784,7 @@ class Interpreter:
         return res.success(result)
 
 GlobalSymbolTable = SymbolTable()
-GlobalSymbolTable.add_keywords(['var', 'and', 'or', 'not'])
+GlobalSymbolTable.add_keywords('var', 'and', 'or', 'not', 'if', 'else', 'fi')
 GlobalSymbolTable.assign("Null", Number(Token(type=TT_INT, value="0")))
 
 def Main(input, fn):

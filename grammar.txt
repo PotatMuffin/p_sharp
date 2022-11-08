@@ -1,3 +1,7 @@
+fi-expr		: KEYWORD:fi
+			: KEYWORD:else
+			: expr
+
 expr  	    : KEYWORD:var IDENTIFIER EQ expr
 			: comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)
 
@@ -15,3 +19,6 @@ power   	: atom ((POW) factor)*
 
 atom		: INT|FLOAT|IDENTIFIER
 			: LPAREN expr RPAREN
+			: if-expr
+	
+if-expr		: KEYWORD:if expr
