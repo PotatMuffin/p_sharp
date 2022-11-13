@@ -242,6 +242,7 @@ class Lexer:
         '(': lambda: tokens.append(Token(type=TT_LPAREN, pos_start=self.pos.copy())),
         ')': lambda: tokens.append(Token(type=TT_RPAREN, pos_start=self.pos.copy())),
         '^': lambda: tokens.append(Token(type=TT_POW, pos_start=self.pos.copy())),
+        ';': lambda: tokens.append(Token(type=TT_NEWLINE, pos_start=self.pos.copy())),
         '!': lambda: tokens.append(self.make_not_equals()),
         '=': lambda: tokens.append(self.make_equals()),
         '>': lambda: tokens.append(self.make_greater_than()),
@@ -258,7 +259,7 @@ class Lexer:
             if self.pos.current_char in LETTERS:
                 tokens.append(self.make_identifier())
                 continue
-            if self.pos.current_char in ';\n':
+            if self.pos.current_char == '\n':
                 pos = self.pos.copy()
                 pos.back_line()
                 tokens.append(Token(type=TT_NEWLINE, pos_start=pos))
@@ -403,8 +404,10 @@ class Parser:
                 if newline_count == 0:
                     more_statements = False
             
+            if self.current_token.type == TT_EOF: break
             if not more_statements: break
             if not self.current_token: break
+
             statement = res.register(self.expr())
             statements.append(statement)
         
@@ -451,7 +454,6 @@ class Parser:
 
             return res.success(if_expr)
 
-        print(self.current_token)
         return res.failure(InvalidSyntaxError(
             self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
             "Expected int, float, '+', '-', Identifier or '('",
@@ -799,7 +801,7 @@ def Main(input, fn):
     lexer = Lexer(input, fn)
     tokens, error = lexer.make_tokens()
     if error: return tokens, error
-    if len(tokens) == 1: return None, None
+    if len(tokens) == 1: return [], None
 
     parser = Parser(tokens)
     ast = parser.parse()
