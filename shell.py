@@ -5,6 +5,7 @@ while True:
         input_ = input("p# > ")
         result, error = Main(input_, '<Shell>')
         if error: print(error.as_string())
-        else: print(result) if result else ""
+        else: 
+            for res in result: print(res) if result else ""
     except KeyboardInterrupt:
         exit()

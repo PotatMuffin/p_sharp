@@ -1,12 +1,10 @@
-fi-expr		: KEYWORD:fi
-			: KEYWORD:else
-			: expr
+statements  : NEWLINE* expr (NEWLINE+ expr)* NEWLINE*
 
 expr  	    : KEYWORD:var IDENTIFIER EQ expr
 			: comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)
 
 comp-expr	: not comp-expr
-			: arith-expr ((IS|LT|GT|LTE|GTE) arith-expr)
+			: arith-expr ((IS|ISNOT|LT|GT|LTE|GTE) arith-expr)
 
 arith-expr  : term ((PLUS|MINUS) term)*
 
@@ -21,4 +19,4 @@ atom		: INT|FLOAT|IDENTIFIER
 			: LPAREN expr RPAREN
 			: if-expr
 	
-if-expr		: KEYWORD:if expr
+if-expr		: KEYWORD:if expr KEYWORD:then expr

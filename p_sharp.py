@@ -1,6 +1,5 @@
 from __future__ import annotations
 from arrows import add_arrows
-from enum import Enum
 import string
 
 #############################
@@ -70,40 +69,51 @@ class SymbolTable:
         self.symbols[var_name] = value
 
 #############################
-# State
-#############################
-
-class states(Enum):
-    RUNNING = 'running'
-    FALSEIF = 'falseif'
-    DEFFUNC = 'deffunc'
-
-state = states.RUNNING
-
-#############################
 # Position
 #############################
 
 class Position:
-    def __init__(self, idx, col, text, fn) -> None:
+    def __init__(self, idx:int, ln:int, text:str, fn:str) -> None:
         self.idx = idx
-        self.col = col
+        self.col = idx
+        self.ln = ln
         self.text = text
         self.fn = fn
         self.current_char = self.text[self.idx] if self.idx < len(self.text) else None
+        self.set_current_line()
+
+    def set_current_line(self):
+        split_text = self.text.split('\n')
+        if self.ln < len(split_text):
+            self.current_line = split_text[self.ln-1]
+        else:
+            self.current_line = split_text[-1]
+        return self.current_line
     
     def advance(self):
-        self.idx += 1
         self.col += 1
-        self.current_char = self.text[self.idx] if self.idx < len(self.text) else None
+        self.idx += 1
+        self.current_char = self.text[self.col] if self.col < len(self.text) else None
+        if self.current_char == '\n':
+            self.ln += 1
+            self.idx = 0
+            self.set_current_line()
 
     def back(self):
-        self.idx -= 1
+        if self.current_char == '\n':
+            self.ln -= 1
+            self.idx = len(self.set_current_line())
+
         self.col -= 1
-        self.current_char = self.text[self.idx] if self.idx < len(self.text) else None
+        self.idx -= 1
+        self.current_char = self.text[self.col] if self.col < len(self.text) else None
     
+    def back_line(self):
+        self.ln -= 1
+        self.idx = len(self.set_current_line())-1
+
     def copy(self):
-        return Position(self.idx, self.col, self.text, self.fn)
+        return Position(self.idx, self.ln, self.text, self.fn)
 
 #############################
 # Token
@@ -126,19 +136,21 @@ TT_KEYWORD = "KEYWORD"
 TT_EQ = "EQ"
 
 TT_IS = "IS"
+TT_ISNOT = "ISNOT"
 TT_GT = "GT" # greater than
 TT_GTE = "GTE" # greater than or equals
 TT_LT = "LT" # lower than
 TT_LTE = "LTE" # lower than or equals
 
-TT_EOL = 'EOL'
+TT_NEWLINE = "NEWLINE"
+TT_EOF = "EOF"
 
 class Token:
     def __init__(self, type, value=None, pos_start:Position=None, pos_end:Position=None) -> None:
         self.type = type
         self.value = value
-        self.pos_start = pos_start
-        self.pos_end = pos_end
+        self.pos_start = pos_start.copy() if pos_start else None
+        self.pos_end = pos_end.copy() if pos_end else None
 
         if not self.pos_end and self.pos_start:
             self.pos_end = pos_start.copy()
@@ -180,6 +192,14 @@ class Lexer:
             return Token(type=TT_IS, pos_start=pos, pos_end=self.pos.copy())
         self.pos.back()
         return Token(type=TT_EQ, pos_start=pos)
+    
+    def make_not_equals(self):
+        pos = self.pos.copy()
+        self.pos.advance()
+        if self.pos.current_char == '=':
+            return Token(type=TT_ISNOT, pos_start=pos, pos_end=self.pos.copy())
+        self.pos.back()
+        return Token(type=TT_KEYWORD, value='not', pos_start=pos)
 
     def make_identifier(self):
         pos = self.pos.copy()
@@ -207,11 +227,8 @@ class Lexer:
             
             digit += self.pos.current_char
             self.pos.advance()
-        
-        pos_end = self.pos.copy()
-        pos_end.back()
 
-        return Token(type=TT_INT, value=digit, pos_start=pos, pos_end=pos_end) if dot_count == 0 else Token(type=TT_FLOAT, value=digit, pos_start=pos, pos_end=self.pos.copy())
+        return Token(type=TT_INT, value=digit, pos_start=pos, pos_end=self.pos.copy()) if dot_count == 0 else Token(type=TT_FLOAT, value=digit, pos_start=pos, pos_end=self.pos.copy())
 
     
     def make_tokens(self):
@@ -225,6 +242,7 @@ class Lexer:
         '(': lambda: tokens.append(Token(type=TT_LPAREN, pos_start=self.pos.copy())),
         ')': lambda: tokens.append(Token(type=TT_RPAREN, pos_start=self.pos.copy())),
         '^': lambda: tokens.append(Token(type=TT_POW, pos_start=self.pos.copy())),
+        '!': lambda: tokens.append(self.make_not_equals()),
         '=': lambda: tokens.append(self.make_equals()),
         '>': lambda: tokens.append(self.make_greater_than()),
         '<': lambda: tokens.append(self.make_lower_than())
@@ -240,13 +258,19 @@ class Lexer:
             if self.pos.current_char in LETTERS:
                 tokens.append(self.make_identifier())
                 continue
+            if self.pos.current_char in ';\n':
+                pos = self.pos.copy()
+                pos.back_line()
+                tokens.append(Token(type=TT_NEWLINE, pos_start=pos))
+                self.pos.advance()
+                continue
             if self.pos.current_char not in chars:
-                return [], IllegalCharError(self.pos.fn, self.pos.text, self.pos.current_char, self.pos.idx)
+                return [], IllegalCharError(self.pos.fn, self.pos.current_line, self.pos.current_char, self.pos.idx)
 
             chars[self.pos.current_char]()
             self.pos.advance()
 
-        tokens.append(Token(type=TT_EOL, pos_start=self.pos))
+        tokens.append(Token(type=TT_EOF, pos_start=self.pos))
         return tokens, None
 
 #############################
@@ -299,19 +323,13 @@ class IfNode:
     def __repr__(self) -> str:
         return f"if {self.condition}"
 
-class FiNode:
-    def __init__(self, token) -> None:
-        self.token = token
+class ListNode:
+    def __init__(self, statements:list) -> None:
+        self.statements = statements
     
     def __repr__(self) -> str:
-        return f"{self.token}"
-
-class ElseNode:
-    def __init__(self, token) -> None:
-        self.token = token
-    
-    def __repr__(self) -> str:
-        return f"{self.token}"
+        return f"{self.statements}"
+        
 #############################
 # ParseResult
 #############################
@@ -353,15 +371,45 @@ class Parser:
         return self.current_token
 
     def parse(self):
-        result = self.fi_expr()
-        if not result.error and self.current_token.type != TT_EOL:
-            return result.failure(InvalidSyntaxError(
+        result = self.statements()
+            
+        return result
+
+    def statements(self):
+        res = ParseResult()
+        statements = []
+
+        while self.current_token.type == TT_NEWLINE:
+            self.advance()
+        
+        statement = res.register(self.expr())
+        if res.error: return res
+        statements.append(statement)
+        more_statements = True
+
+        while self.current_token.type != TT_EOF:
+
+            if self.current_token.type != TT_NEWLINE:
+                return res.failure(InvalidSyntaxError(
                 self.current_token.pos_start.fn, self.current_token.pos_start.text,
                 "Token cannot appear after previous token", 
                 self.current_token.pos_start.idx, self.current_token.pos_end.idx
             ))
-        return result
 
+            newline_count = 0
+            while self.current_token and self.current_token.type == TT_NEWLINE:
+                self.advance()
+                newline_count += 1
+                if newline_count == 0:
+                    more_statements = False
+            
+            if not more_statements: break
+            if not self.current_token: break
+            statement = res.register(self.expr())
+            statements.append(statement)
+        
+        return res.success(ListNode(statements))
+    
     def if_expr(self):
         res = ParseResult()
 
@@ -392,7 +440,7 @@ class Parser:
                 return res.success(expr)
             else:
                 return res.failure(InvalidSyntaxError(
-					self.current_token.pos_start.fn, self.current_token.pos_start.text,
+					self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
 					"Expected ')'", 
                     self.current_token.pos_start.idx, self.current_token.pos_end.idx
 				))
@@ -403,8 +451,9 @@ class Parser:
 
             return res.success(if_expr)
 
+        print(self.current_token)
         return res.failure(InvalidSyntaxError(
-            self.current_token.pos_start.fn, self.current_token.pos_start.text,
+            self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
             "Expected int, float, '+', '-', Identifier or '('",
             self.current_token.pos_start.idx, self.current_token.pos_end.idx
         ))
@@ -440,7 +489,7 @@ class Parser:
             if res.error: return res
             return res.success(UnaryOpNode(token, node))
         
-        node = res.register(self.Bin_Op(self.arith_expr, (TT_IS, TT_LT, TT_GT, TT_LTE, TT_GTE)))
+        node = res.register(self.Bin_Op(self.arith_expr, (TT_IS, TT_ISNOT, TT_LT, TT_GT, TT_LTE, TT_GTE)))
     
         if res.error: return res
         return res.success(node)
@@ -452,7 +501,7 @@ class Parser:
 
             if self.current_token.type != TT_IDENTIFIER:
                 return res.failure(InvalidSyntaxError(
-                    self.current_token.pos_start.fn, self.current_token.pos_start.text,
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
                     "Expected Identifier",
                     self.current_token.pos_start.idx, self.current_token.pos_end.idx
                 ))
@@ -462,7 +511,7 @@ class Parser:
 
             if self.current_token.type != TT_EQ:
                 return res.failure(InvalidSyntaxError(
-                    self.current_token.pos_start.fn, self.current_token.pos_start.text,
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
                     "Expected '='",
                     self.current_token.pos_start.idx, self.current_token.pos_end.idx
                 ))
@@ -474,26 +523,6 @@ class Parser:
 
         node = res.register(self.Bin_Op(self.comp_expr, ((TT_KEYWORD, 'and'), (TT_KEYWORD, 'or'))))
         if res.error: return res
-        return res.success(node)
-
-    def fi_expr(self):
-        res = ParseResult()
-
-        if self.current_token.matches(TT_KEYWORD, 'fi'):
-            token = self.current_token
-            self.advance()
-
-            return res.success(FiNode(token))
-
-        if self.current_token.matches(TT_KEYWORD, 'else'):
-            token = self.current_token
-            self.advance()
-
-            return res.success(ElseNode(token))
-
-        node = res.register(self.expr())
-        if res.error: return res
-
         return res.success(node)
 
     def Bin_Op(self, function, operators, function2=None):
@@ -579,7 +608,7 @@ class Number:
 
         if other.token.value == "0":
             return res.failure(ZeroDivisionError(
-                self.token.pos_start.fn, self.token.pos_start.text,
+                self.token.pos_start.fn, self.token.pos_start.current_line,
                 "Can't divide by zero", 
                 self.token.pos_start.idx, other.token.pos_end.idx
             ))
@@ -596,7 +625,7 @@ class Number:
         type=self.token.type
         try: value = str(eval(f"{self.token.value}**{other.token.value}"))
         except: return res.failure(ValueError(
-            self.token.pos_start.fn, self.token.pos_start.text, 
+            self.token.pos_start.fn, self.token.pos_start.current_line, 
             "Number exceeds character limit (4300)",
             self.token.pos_start.idx, other.token.pos_end.idx
         ))
@@ -610,6 +639,10 @@ class Number:
         if self.token.matches(other.token.type, other.token.value):
             return res.success(Number(Token(type=TT_INT, value="1", pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
         return res.success(Number(Token(type=TT_INT, value="0", pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
+
+    def not_equals(self, other:NumNode|Number):
+        res = RunTimeResult()
+        return res.success(Number(Token(type=TT_INT, value="1" if not self.token.matches(other.token.type, other.token.value) else "0", pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
 
     def greater_than(self, other:NumNode|Number):
         res = RunTimeResult()
@@ -655,47 +688,21 @@ class Interpreter:
         raise AttributeError(f"no visit_{type(node).__name__} method found")
 
     def visit(self, node):
-        res = RunTimeResult()
         method_name = f"visit_{type(node).__name__}"
         method = getattr(self, method_name, self.no_visit_method)
 
-        if state == states.FALSEIF:
-            if type(node) in (FiNode, ElseNode):
-                return method(node)
-            return res.success(None)
-
         return method(node)
-    
-    def visit_ElseNode(self, node:ElseNode):
+
+    def visit_ListNode(self, node:ListNode):
         res = RunTimeResult()
-        global state
-        if state == states.RUNNING:
-            state = states.FALSEIF
-        elif state == states.FALSEIF:
-            state = states.RUNNING
+        results = []
+
+        for statement in node.statements:
+            result = res.register(self.visit(statement))
+            if res.error: return res
+            results.append(result)
         
-        return res.success(node)
-
-    def visit_FiNode(self, node:FiNode):
-        res = RunTimeResult()
-        global state
-        state = states.RUNNING
-
-        return res.success(node)
-
-    def visit_IfNode(self, node:IfNode):
-        res = RunTimeResult()
-        global state
-
-        condition:Number = res.register(self.visit(node.condition))
-        if res.error: return res
-
-        if condition.is_true(): 
-            state = states.RUNNING
-        else: 
-            state = states.FALSEIF
-        
-        return res.success(condition)
+        return res.success(results)
 
     def visit_VarNode(self, node:VarNode):
         res = RunTimeResult()
@@ -704,7 +711,7 @@ class Interpreter:
 
         if not value:
             return res.failure(NameError(
-                node.var.pos_start.fn, node.var.pos_start.text,
+                node.var.pos_start.fn, node.var.pos_start.current_line,
                 f"{var_name} is not defined",
                 node.var.pos_start.idx, node.var.pos_end.idx
             ))
@@ -729,7 +736,7 @@ class Interpreter:
         if node.token.type == TT_INT:
             if len(node.token.value) > 1 and node.token.value[0] == "0":
                 return res.failure(InvalidSyntaxError(
-                    node.token.pos_start.fn, node.token.pos_start.text,
+                    node.token.pos_start.fn, node.token.pos_start.current_line,
                     "Leading zeros in integers are not permitted",
                     node.token.pos_start.idx, node.token.pos_start.idx
                 ))
@@ -766,6 +773,7 @@ class Interpreter:
             TT_DIV: left.divide,
             TT_POW: left.power,
             TT_IS: left.equals,
+            TT_ISNOT: left.not_equals,
             TT_GT: left.greater_than,
             TT_GTE: left.greater_equals,
             TT_LT: left.lower_than,
@@ -784,7 +792,7 @@ class Interpreter:
         return res.success(result)
 
 GlobalSymbolTable = SymbolTable()
-GlobalSymbolTable.add_keywords('var', 'and', 'or', 'not', 'if', 'else', 'fi')
+GlobalSymbolTable.add_keywords('var', 'and', 'or', 'not', 'if', 'then')
 GlobalSymbolTable.assign("Null", Number(Token(type=TT_INT, value="0")))
 
 def Main(input, fn):
@@ -798,6 +806,6 @@ def Main(input, fn):
     if ast.error: return None, ast.error
 
     interpreter = Interpreter()
-    result = interpreter.visit(ast.node)
+    result = interpreter.visit(ast.node) 
 
     return result.value, result.error
