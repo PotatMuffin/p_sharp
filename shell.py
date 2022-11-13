@@ -6,6 +6,6 @@ while True:
         result, error = Main(input_, '<Shell>')
         if error: print(error.as_string())
         else: 
-            for res in result: print(res) if result else ""
+            for res in result: print(res)
     except KeyboardInterrupt:
         exit()
