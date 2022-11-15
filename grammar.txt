@@ -19,4 +19,4 @@ atom		: INT|FLOAT|IDENTIFIER
 			: LPAREN expr RPAREN
 			: if-expr
 	
-if-expr		: KEYWORD:if expr KEYWORD:then expr
+if-expr		: KEYWORD:if expr KEYWORD:then NEWLINE* expr NEWLINE* KEYWORD:else? KEYWORD:fi

@@ -96,7 +96,7 @@ class Position:
         self.current_char = self.text[self.col] if self.col < len(self.text) else None
         if self.current_char == '\n':
             self.ln += 1
-            self.idx = 0
+            self.idx = -1
             self.set_current_line()
 
     def back(self):
@@ -318,11 +318,13 @@ class VarNode:
         return f"{self.var}"
 
 class IfNode:
-    def __init__(self, condition) -> None:
+    def __init__(self, condition, expressions:ListNode, else_:ListNode=None) -> None:
         self.condition = condition
+        self.exprs = expressions
+        self.else_ = else_
 
     def __repr__(self) -> str:
-        return f"if {self.condition}"
+        return f"if {self.condition} then {self.exprs}"
 
 class ListNode:
     def __init__(self, statements:list) -> None:
@@ -392,7 +394,7 @@ class Parser:
 
             if self.current_token.type != TT_NEWLINE:
                 return res.failure(InvalidSyntaxError(
-                self.current_token.pos_start.fn, self.current_token.pos_start.text,
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
                 "Token cannot appear after previous token", 
                 self.current_token.pos_start.idx, self.current_token.pos_end.idx
             ))
@@ -412,15 +414,62 @@ class Parser:
             statements.append(statement)
         
         return res.success(ListNode(statements))
-    
+
     def if_expr(self):
         res = ParseResult()
+        expressions = []
+        else_ = []
+        else_case = False
 
         self.advance()
         condition = res.register(self.expr())
         if res.error: return res
-    
-        return res.success(IfNode(condition))
+
+        if not self.current_token.matches(TT_KEYWORD, "then"):
+            return res.failure(InvalidSyntaxError(
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                "Expected 'then'",
+                self.current_token.pos_start.idx, self.current_token.pos_end.idx
+            ))
+        
+        self.advance()
+
+        while self.current_token.type != TT_EOF:
+            if self.current_token.type == TT_NEWLINE:
+                self.advance()
+                continue
+            if self.current_token.matches(TT_KEYWORD, "fi"): 
+                self.advance()
+                break
+            if self.current_token.matches(TT_KEYWORD, "else"):
+                self.advance()
+                else_case = True
+                break
+
+            expr = res.register(self.expr())
+            if res.error: return res
+            expressions.append(expr)
+
+            if self.current_token.type != TT_NEWLINE: break
+            self.advance()
+        
+        if else_case:
+            while self.current_token.type != TT_EOF:
+                if self.current_token.type == TT_NEWLINE:
+                    self.advance()
+                    continue
+                if self.current_token.matches(TT_KEYWORD, "fi"): 
+                    self.advance()
+                    break
+
+                expr = res.register(self.expr())
+                if res.error: return res
+                else_.append(expr)
+
+                if self.current_token.type != TT_NEWLINE: break
+                self.advance()
+
+        return res.success(IfNode(condition, ListNode(expressions), ListNode(else_)))
 
     def atom(self):
         res = ParseResult()
@@ -706,6 +755,28 @@ class Interpreter:
         
         return res.success(results)
 
+    def visit_IfNode(self, node:IfNode):
+        res = RunTimeResult()
+        exprs = []
+
+        condition:Number = res.register(self.visit(node.condition))
+        if res.error: return res
+
+        if condition.is_true():
+            for expr in node.exprs.statements:
+                expr = res.register(self.visit(expr))
+                if res.error: return res
+
+                exprs.append(expr)
+        else:
+            for expr in node.else_.statements:
+                expr = res.register(self.visit(expr))
+                if res.error: return res
+
+                exprs.append(expr)
+        
+        return res.success(exprs)
+    
     def visit_VarNode(self, node:VarNode):
         res = RunTimeResult()
         var_name = node.var.value
@@ -727,6 +798,9 @@ class Interpreter:
         var_name = node.var_name.value
         value = res.register(self.visit(node.value))
         if res.error: return res
+
+        if type(value) == list:
+            value = value[0]
 
         GlobalSymbolTable.assign(var_name, value)
         return res.success(value)
@@ -750,6 +824,10 @@ class Interpreter:
 
         n:Number = res.register(self.visit(node.node))
         if res.error: return res
+
+        if type(n) == list:
+            n = n[0]
+
         pos_start = n.token.pos_start
         pos_start.back()
 
@@ -767,6 +845,11 @@ class Interpreter:
         if res.error: return res
         right:Number = res.register(self.visit(node.right))
         if res.error: return res
+
+        if type(left) == list:
+            left = left[0]
+        if type(right) == list:
+            right = right[0]
         
         ops = {
             TT_PLUS: left.plus,
@@ -794,7 +877,7 @@ class Interpreter:
         return res.success(result)
 
 GlobalSymbolTable = SymbolTable()
-GlobalSymbolTable.add_keywords('var', 'and', 'or', 'not', 'if', 'then')
+GlobalSymbolTable.add_keywords('var', 'and', 'or', 'not', 'if', 'then', 'fi', 'else')
 GlobalSymbolTable.assign("Null", Number(Token(type=TT_INT, value="0")))
 
 def Main(input, fn):
