@@ -1,22 +1,29 @@
 statements  : NEWLINE* expr (NEWLINE+ expr)* NEWLINE*
 
 expr  	    : KEYWORD:var IDENTIFIER EQ expr
-			: comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)
+			: comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
 
 comp-expr	: not comp-expr
-			: arith-expr ((IS|ISNOT|LT|GT|LTE|GTE) arith-expr)
+			: arith-expr ((IS|ISNOT|LT|GT|LTE|GTE) arith-expr)*
 
 arith-expr  : term ((PLUS|MINUS) term)*
 
 term    	: factor ((MUL|DIV) factor)*
 
-factor  	: (PLUS|MINUS) factor
+factor  	: (PLUS|MINUS)* factor
 			: power
 
 power   	: atom ((POW) factor)*
 
-atom		: INT|FLOAT|IDENTIFIER
+atom		: INT|FLOAT|STR|IDENTIFIER(LSQUARE expr RSQUARE)?
 			: LPAREN expr RPAREN
 			: if-expr
+			: while-expr
+			: for-expr
 	
-if-expr		: KEYWORD:if expr KEYWORD:then NEWLINE* expr NEWLINE* KEYWORD:else? KEYWORD:fi
+if-expr		: KEYWORD:if expr KEYWORD:then statements 
+			  (KEYWORD:else statements)? KEYWORD:fi
+
+while-expr  : KEYWORD:while expr KEYWORD:then statements KEYWORD:end
+
+for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER EQ KEYWORD:in STR KEYWORD:then statements KEYWORD:end

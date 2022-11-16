@@ -3,13 +3,16 @@ from sys import argv
 from os import path
 
 if len(argv) == 1:
+    ShellNum = 0
+
     while True:
         try:
             input_ = input("p# > ")
-            result, error = Main(input_, '<Shell>')
+            result, error = Main(input_, f'<Shell#{ShellNum}>')
             if error: print(error.as_string())
             else: 
                 for res in result: print(res)
+            ShellNum += 1
         except KeyboardInterrupt:
             exit()
 else:
