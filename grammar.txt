@@ -15,15 +15,17 @@ factor  	: (PLUS|MINUS)* factor
 
 power   	: atom ((POW) factor)*
 
-atom		: INT|FLOAT|STR|IDENTIFIER(LSQUARE expr RSQUARE)?
+atom		: INT|FLOAT|STR|IDENTIFIER
 			: LPAREN expr RPAREN
 			: if-expr
 			: while-expr
 			: for-expr
-	
+
+func-expr	: KEYWORD:def IDENTIFIER LPAREN (IDENTIFIER (comma IDENTIFIER)*)? RPAREN then statements
+
 if-expr		: KEYWORD:if expr KEYWORD:then statements 
 			  (KEYWORD:else statements)? KEYWORD:fi
 
 while-expr  : KEYWORD:while expr KEYWORD:then statements KEYWORD:end
 
-for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER EQ KEYWORD:in STR KEYWORD:then statements KEYWORD:end
+for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER KEYWORD:in expr KEYWORD:then statements KEYWORD:end

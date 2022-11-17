@@ -23,7 +23,8 @@ else:
         try:
             result, error = Main(f.read(), f.name)
             if error: print(error.as_string())
-            else: print(result)
+            else: 
+                for res in result: print(res)
 
         except KeyboardInterrupt:
             exit()
