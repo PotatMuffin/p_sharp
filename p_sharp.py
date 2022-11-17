@@ -254,7 +254,7 @@ class Lexer:
 
         self.pos.advance()
         while self.pos.current_char and self.pos.current_char in characters:
-            if self.pos.current_char == '"': 
+            if self.pos.current_char in '"\'': 
                 self.pos.advance()
                 break
 
@@ -296,7 +296,7 @@ class Lexer:
             if self.pos.current_char in LETTERS:
                 tokens.append(self.make_identifier())
                 continue
-            if self.pos.current_char == '"':
+            if self.pos.current_char in '"\'':
                 tokens.append(self.make_string())
                 continue
             if self.pos.current_char == '\n':
@@ -1065,9 +1065,6 @@ class String(Value):
         
         str = self.token.value + other.token.value
         return res.success(String(Token(type=TT_STR, value=str, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
-
-    def minus(self, other:Value):
-        return self.IllegalOperation(other, '-')
     
     def multiply(self, other:Number|NumNode):
         res = RunTimeResult()
@@ -1077,12 +1074,6 @@ class String(Value):
 
         str = self.token.value * int(other.token.value)
         return res.success(String(Token(type=TT_STR, value=str, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
-
-    def divide(self, other:Number|NumNode):
-        return self.IllegalOperation(other, '/')
-
-    def power(self, other:Value):
-        return self.IllegalOperation(other, '^')
 
     def equals(self, other:NumNode|Number):
         res = RunTimeResult()
@@ -1095,18 +1086,6 @@ class String(Value):
         if self.token.matches(token=other.token): value = "0"
         else: value = "1"
         return res.success(Number(Token(type=TT_INT, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
-    
-    def greater_than(self, other:Value):
-        return self.IllegalOperation(other, '>')
-    
-    def greater_equals(self, other:Value):
-        return self.IllegalOperation(other, '>=')
-    
-    def lower_than(self, other:Value):
-        return self.IllegalOperation(other, '<')
-    
-    def lower_equals(self, other:Value):
-        return self.IllegalOperation(other, '<=')
 
     def and_(self, other:Number):
         res = RunTimeResult()
@@ -1320,7 +1299,12 @@ class Interpreter:
         return res.success(result)
 
 GlobalSymbolTable = SymbolTable()
-GlobalSymbolTable.add_keywords('var', 'and', 'or', 'not', 'if', 'then', 'else', 'fi', 'while', 'for', 'in', 'end')
+GlobalSymbolTable.add_keywords(
+    'var', 'func',
+    'and', 'or', 'not', 
+    'if', 'then', 'else', 'fi', 
+    'while', 'for', 'in', 'end'
+)
 GlobalSymbolTable.assign_multiple(
     ("Null", Number(Token(type=TT_INT, value=0))), 
     ("True", Number(Token(type=TT_INT, value=1))),
