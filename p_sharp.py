@@ -166,7 +166,7 @@ TT_NEWLINE = "NEWLINE"
 TT_EOF = "EOF"
 
 class Token:
-    def __init__(self, type, value=None, pos_start:Position=None, pos_end:Position=None) -> None:
+    def __init__(self, type, value=None, pos_start:Position=Position(0,0,"",""), pos_end:Position=None) -> None:
         self.type = type
         self.value = value
         self.pos_start = pos_start.copy() if pos_start else None
@@ -260,10 +260,11 @@ class Lexer:
     def make_string(self):
         pos = self.pos.copy()
         string = ''
+        quote = self.pos.current_char
 
         self.pos.advance()
         while self.pos.current_char and self.pos.current_char in characters:
-            if self.pos.current_char in '"\'': 
+            if self.pos.current_char == quote: 
                 self.pos.advance()
                 break
 
@@ -304,6 +305,16 @@ class Lexer:
                 continue
             if self.pos.current_char in DIGITS:
                 tokens.append(self.make_digit())
+
+                if self.pos.current_char == 'e':
+                    chars["*"]()
+                    tokens.append(Token(type=TT_INT, value=10, pos_start=self.pos.copy()))
+                    chars["^"]()
+                    self.pos.advance()
+                    
+                    if self.pos.current_char and self.pos.current_char in DIGITS:
+                        tokens.append(self.make_digit())
+                    else: return [], InvalidSyntaxError(self.pos.fn, self.pos.current_line, self.pos.current_char, self.pos.idx)
                 continue
             if self.pos.current_char in LETTERS:
                 tokens.append(self.make_identifier())
@@ -963,12 +974,18 @@ class RunTimeResult:
     def __init__(self) -> None:
         self.value = None
         self.error = None
+        self.return_value = None
         
     def register(self, res):
         if isinstance(res, RunTimeResult):
             if res.error: self.error = res.error
+            elif res.return_value: self.return_value = res.return_value
             else: return res.value
         return res
+    
+    def return_(self, value):
+        self.return_value = value
+        return self
 
     def success(self, value):
         self.value = value
@@ -989,6 +1006,10 @@ class Value:
         else:
             self.token = node.token
     
+    def check_value(self):
+        res = RunTimeResult()
+        return res.success(self.token.value)
+
     def IllegalOperation(self, other=None, operand:str=None):
         res = RunTimeResult()
         if not other: other = self
@@ -1047,6 +1068,18 @@ class Value:
     def index(self, other:Value):
         return self.IllegalOperation(other, '')
 
+    def length(self):
+        res = RunTimeResult()
+        return res.failure(TypeError(
+            self.token.pos_start.fn, self.token.pos_start.current_line,
+            f"Type {self.token.type.lower()} has no length",
+            self.token.pos_start.idx, self.token.pos_end.idx
+        ))
+
+    def type(self):
+        res = RunTimeResult()
+        return res.success(String(Token(type=TT_STR, value=self.token.type.lower())))
+
     def __repr__(self) -> str:
         return f"{self.token}"
 
@@ -1055,6 +1088,17 @@ class Number(Value):
         super().__init__(node)
         self.token.value = int(self.token.value) if self.token.type == TT_INT else float(self.token.value)
     
+    def check_value(self):
+        res = RunTimeResult()
+        try: 
+            return res.success(str(self.token.value))
+        except: 
+            return res.failure(ValueError(
+                self.token.pos_start.fn, self.token.pos_start.current_line,
+                "Value exceeds 4300 character limit",
+                self.token.pos_start.idx, self.token.pos_end.idx
+            ))
+
     def plus(self, other:Number):
         res = RunTimeResult()
 
@@ -1062,7 +1106,7 @@ class Number(Value):
             return self.IllegalOperation(other, '+')
 
         type=self.token.type
-        value = eval(f"{self.token.value}+{other.token.value}")       
+        value = self.token.value+other.token.value       
         if other.token.type == TT_FLOAT:
             type = TT_FLOAT
         return res.success(Number(NumNode(Token(type=type, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end))))
@@ -1074,7 +1118,7 @@ class Number(Value):
             return self.IllegalOperation(other, '-')
 
         type=self.token.type        
-        value = eval(f"{self.token.value}-{other.token.value}")               
+        value = self.token.value-other.token.value               
         if other.token.type == TT_FLOAT:
             type = TT_FLOAT
         return res.success(Number(NumNode(Token(type=type, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end))))
@@ -1086,7 +1130,7 @@ class Number(Value):
             return self.IllegalOperation(other, '*')
 
         type=self.token.type
-        value = eval(f"{self.token.value}*{other.token.value}")
+        value = self.token.value*other.token.value
         if other.token.type == TT_FLOAT:
             type = TT_FLOAT
         return res.success(Number(NumNode(Token(type=type, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end))))
@@ -1105,7 +1149,7 @@ class Number(Value):
             ))
 
         type=self.token.type
-        value = eval(f"{self.token.value}/{other.token.value}")
+        value = self.token.value/other.token.value
 
         type = TT_FLOAT
         return res.success(Number(NumNode(Token(type=type, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end))))
@@ -1117,7 +1161,7 @@ class Number(Value):
             return self.IllegalOperation(other, '^')
 
         type=self.token.type
-        value = eval(f"{self.token.value}**{other.token.value}")
+        value = self.token.value**other.token.value
 
         if other.token.type == TT_FLOAT or other.token.value < 0:
             type = TT_FLOAT
@@ -1260,11 +1304,15 @@ class String(Value):
         value = self.token.value[int(other.token.value)]
         return res.success(String(Token(type=TT_STR, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
 
+    def length(self):
+        res = RunTimeResult()
+        return res.success(Number(Token(type=TT_INT, value=len(self.token.value), pos_start=self.token.pos_start, pos_end=self.token.pos_end)))
+
 #######################################
-# Function
+# Functions
 #######################################
 
-class Function:
+class Function(Value):
     def __init__(self, token:Token, func_args:list[Token], exprs:list) -> None:
         self.args = func_args
         self.exprs = exprs
@@ -1306,6 +1354,68 @@ class Function:
 
     def __repr__(self) -> str:
         return f"{self.token.value}({self.args})"
+
+class BuiltInFunction(Function):
+    def __init__(self, func_name, args:list[str]) -> None:
+        self.token = Token(type=TT_FUNC, value=func_name)
+        self.args = []
+        for arg in args:
+            self.args.append(Token(TT_IDENTIFIER, arg))
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        self.new_symbol_table(parent_symbol_table)
+        res.register(self.set_args(args))
+        if res.error: return res
+
+class Print(BuiltInFunction):
+    def __init__(self) -> None: 
+        super().__init__("<print>", ["value"])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        print(self.symbol_table.get_variable("value").token.value)
+        return res.success(GlobalSymbolTable.get_variable("Null"))
+
+class Length(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("<length>", ["value"])
+
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        return self.symbol_table.get_variable("value").length()
+
+class Type(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("type", ["value"])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        return self.symbol_table.get_variable("value").type()
+
+class Execute(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("execute", ["input"])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        var = self.symbol_table.get_variable("input")
+        _, error = Main(str(var.token.value), var.token.pos_start.fn)
+        if error: return res.failure(error)
+
+        return res.success(GlobalSymbolTable.get_variable("Null"))
 
 #######################################
 # Interpreter
@@ -1352,10 +1462,10 @@ class Interpreter:
             if res.error: return res
             args.append(arg)
         
-        res.register(func.execute(args, symbol_table))
+        result = res.register(func.execute(args, symbol_table))
         if res.error: return res
 
-        return res.success(GlobalSymbolTable.get_variable("Null"))
+        return result
 
     def visit_FuncDefNode(self, node:FuncDefNode, symbol_table):
         res = RunTimeResult()
@@ -1513,8 +1623,11 @@ class Interpreter:
                 result = res.register(left.or_(right))
         elif node.op.type in ops:
             result = res.register(ops[node.op.type](right))
-        
         if res.error: return res
+        
+        res.register(result.check_value())
+        if res.error: return res
+
         return res.success(result)
 
 GlobalSymbolTable = SymbolTable()
@@ -1528,7 +1641,11 @@ GlobalSymbolTable.assign_multiple(
     ("Null", Number(Token(type=TT_INT, value=0))), 
     ("True", Number(Token(type=TT_INT, value=1))),
     ("False", Number(Token(type=TT_INT, value=0))),
-    ("PI", Number(Token(type=TT_FLOAT, value=str(math.pi))))
+    ("PI", Number(Token(type=TT_FLOAT, value=str(math.pi)))),
+    ("print", Print()),
+    ("length", Length()),
+    ("type", Type()),
+    ("execute", Execute())
 )
 
 def Main(input, fn):

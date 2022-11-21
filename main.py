@@ -21,10 +21,8 @@ else:
 
     with open(argv[1], 'r') as f:
         try:
-            result, error = Main(f.read(), f.name)
+            result, error = Main(f.read(), path.split(f.name)[1])
             if error: print(error.as_string())
-            else: 
-                for res in result: print(res)
 
         except KeyboardInterrupt:
             exit()
