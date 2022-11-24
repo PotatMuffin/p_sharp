@@ -1,4 +1,9 @@
-statements  : NEWLINE* expr (NEWLINE+ expr)* NEWLINE*
+statements  : NEWLINE* statement (NEWLINE+ statement)* NEWLINE*
+
+statement	: KEYWORD:return expr?
+			: KEYWORD:continue
+			: KEYWORD:break
+			: expr
 
 expr  	    : KEYWORD:var IDENTIFIER EQ expr
 			: comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
@@ -15,7 +20,7 @@ factor  	: (PLUS|MINUS)* factor
 
 power   	: atom ((POW) factor)*
 
-atom		: INT|FLOAT|STR|IDENTIFIER
+atom		: INT|FLOAT|STR|LIST|IDENTIFIER
 			: LPAREN expr RPAREN
 			: if-expr
 			: while-expr
