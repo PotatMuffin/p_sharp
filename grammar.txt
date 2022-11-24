@@ -26,7 +26,7 @@ atom		: INT|FLOAT|STR|LIST|IDENTIFIER
 			: while-expr
 			: for-expr
 
-func-expr	: KEYWORD:def IDENTIFIER LPAREN (IDENTIFIER (comma IDENTIFIER)*)? RPAREN then statements
+func-expr	: KEYWORD:def IDENTIFIER LPAREN (IDENTIFIER (comma IDENTIFIER)*)? RPAREN COLON statements
 
 if-expr		: KEYWORD:if expr KEYWORD:then statements 
 			  (KEYWORD:else statements)? KEYWORD:fi
