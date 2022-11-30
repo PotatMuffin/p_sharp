@@ -1,6 +1,5 @@
 from __future__ import annotations
 from arrows import add_arrows
-from os import path
 import math
 import string
 
@@ -141,20 +140,23 @@ TT_PLUS = "PLUS"
 TT_MIN = "MIN"
 TT_MUL = "MUL"
 TT_DIV = "DIV"
-TT_POW = 'POW'
+TT_POW = "POW"
 
-TT_COMMA = 'COMMA'
+TT_COMMA = "COMMA"
 TT_COLON = "COLON"
 
 TT_LPAREN = "LPAREN"
 TT_RPAREN = "RPAREN"
 TT_LSQUARE = "LSQUARE"
 TT_RSQUARE = "RSQUARE"
+TT_LBRACKET = "LBRACKET"
+TT_RBRACKET = "RBRACKET"
 
 TT_INT = "INT"
 TT_FLOAT = "FLOAT"
 TT_STR = "STR"
 TT_LIST = "LIST"
+TT_DICT = "DICT"
 TT_FUNC = "FUNC"
 
 TT_IDENTIFIER = "IDENTIFIER"
@@ -294,6 +296,8 @@ class Lexer:
         ')': lambda: tokens.append(Token(type=TT_RPAREN, pos_start=self.pos.copy())),
         '[': lambda: tokens.append(Token(type=TT_LSQUARE, pos_start=self.pos.copy())),
         ']': lambda: tokens.append(Token(type=TT_RSQUARE, pos_start=self.pos.copy())),
+        '{': lambda: tokens.append(Token(type=TT_LBRACKET, pos_start=self.pos.copy())),
+        '}': lambda: tokens.append(Token(type=TT_RBRACKET, pos_start=self.pos.copy())),
         '^': lambda: tokens.append(Token(type=TT_POW, pos_start=self.pos.copy())),
         ';': lambda: tokens.append(Token(type=TT_NEWLINE, pos_start=self.pos.copy())),
         ',': lambda: tokens.append(Token(type=TT_COMMA, pos_start=self.pos.copy())),
@@ -336,7 +340,7 @@ class Lexer:
                 self.pos.advance()
                 continue
             if self.pos.current_char not in chars:
-                return [], IllegalCharError(self.pos.fn, self.pos.current_line, self.pos.current_char, self.pos.idx)
+                return [], IllegalCharError(self.pos.fn, self.pos.current_line, self.pos.current_char, self.pos)
 
             chars[self.pos.current_char]()
             self.pos.advance()
@@ -428,6 +432,15 @@ class ForNode:
     def __repr__(self) -> str:
         return f"for {self.var_name} in {self.expr} then {self.exprs}"
 
+class TryNode:
+    def __init__(self, exprs, except_exprs, finally_exprs) -> None:
+        self.exprs = exprs
+        self.except_exprs = except_exprs
+        self.finally_exprs = finally_exprs
+
+    def __repr__(self) -> str:
+        return f"try: {self.exprs} \nexcept: {self.except_exprs} \nfinally: {self.finally_exprs}"
+
 class FuncDefNode:
     def __init__(self, func_name:Token, arguments:list[Token], expressions:list, token) -> None:
         self.func_name = func_name
@@ -517,6 +530,105 @@ class Parser:
         result = self.statements()
             
         return result
+
+    def try_expr(self):
+        res = ParseResult()
+        expressions = []
+        except_expressions = []
+        except_case = False
+        finally_expressions = []
+        finally_case = False
+        self.advance()
+
+        if self.current_token.type != TT_COLON:
+            return res.failure(InvalidSyntaxError(
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                "Expected ':'",
+                self.current_token.pos_start, self.current_token.pos_end
+            ))
+        self.advance()
+
+        while self.current_token.type != TT_EOF:
+            if self.current_token.type == TT_NEWLINE:
+                self.advance()
+                continue       
+            if self.current_token.matches(TT_KEYWORD, "end"):
+                self.advance()
+                break
+            if self.current_token.matches(TT_KEYWORD, "except"):
+                except_case = True
+                self.advance()
+                break
+            if self.current_token.matches(TT_KEYWORD, "finally"):
+                finally_case = True
+                self.advance()
+                break
+
+            expr = res.register(self.statement())
+            if res.error: return res
+
+            expressions.append(expr)
+
+            if self.current_token.type != TT_NEWLINE: break
+            self.advance()
+        
+        if except_case:
+            if self.current_token.type != TT_COLON:
+                return res.failure(InvalidSyntaxError(
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                    "Expected ':'",
+                    self.current_token.pos_start, self.current_token.pos_end
+                ))
+            self.advance()
+            while self.current_token.type != TT_EOF:
+                if self.current_token.type == TT_NEWLINE:
+                    self.advance()
+                    continue
+                if self.current_token.matches(TT_KEYWORD, "end"):
+                    self.advance()
+                    break
+                if self.current_token.matches(TT_KEYWORD, "finally"):
+                    finally_case = True
+                    self.advance()
+                    break
+
+                expr = res.register(self.statement())
+                if res.error: return res
+
+                except_expressions.append(expr)
+                if self.current_token.type != TT_NEWLINE: break
+                self.advance()
+            
+        if finally_case:
+            if self.current_token.type != TT_COLON:
+                return res.failure(InvalidSyntaxError(
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                    "Expected ':'",
+                    self.current_token.pos_start, self.current_token.pos_end
+                ))
+            self.advance()
+            while self.current_token.type != TT_EOF:
+                if self.current_token.type == TT_NEWLINE:
+                    self.advance()
+                    continue
+                if self.current_token.matches(TT_KEYWORD, "end"):
+                    self.advance()
+                    break
+                if self.current_token.matches(TT_KEYWORD, "except"):
+                    return res.failure(InvalidSyntaxError(
+                        self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                        "'except' can't appear after 'finally'",
+                        self.current_token.pos_start, self.current_token.pos_end
+                    ))
+
+                expr = res.register(self.statement())
+                if res.error: return res
+
+                finally_expressions.append(expr)
+                if self.current_token.type != TT_NEWLINE: break
+                self.advance()
+        
+        return res.success(TryNode(expressions, except_expressions, finally_expressions))
 
     def for_expr(self):
         res = ParseResult()
@@ -748,6 +860,9 @@ class Parser:
 
         if self.current_token.type == TT_LSQUARE:
             self.advance()
+            
+            while self.current_token.type == TT_NEWLINE:
+                self.advance()
 
             expressions = []
             if self.current_token.type != TT_RSQUARE:
@@ -757,14 +872,21 @@ class Parser:
 
             while self.current_token.type == TT_COMMA:
                 self.advance()
+
+                while self.current_token.type == TT_NEWLINE:
+                    self.advance()
+
                 expr = res.register(self.expr())
                 if res.error: return res
                 expressions.append(expr)
 
+            while self.current_token.type == TT_NEWLINE:
+                self.advance()
+
             if self.current_token.type != TT_RSQUARE:
                 return res.failure(InvalidSyntaxError(
                     self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                    "Expected ',' or ')'",
+                    "Expected ',' or ']'",
                     self.current_token.pos_start, self.current_token.pos_end
                 ))
             
@@ -781,7 +903,7 @@ class Parser:
                 if self.current_token.type != TT_RSQUARE:
                     return res.failure(TypeError(
                         self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                        "Expected ']'",
+                        "Expected ',' or ']'",
                         self.current_token.pos_start, self.current_token.pos_end
                     ))
                 self.advance()
@@ -883,6 +1005,12 @@ class Parser:
             if res.error: return res
 
             return res.success(for_expr)
+
+        if self.current_token.matches(TT_KEYWORD, 'try'):
+            try_expr = res.register(self.try_expr())
+            if res.error: return res
+
+            return res.success(try_expr)
 
         if self.current_token.matches(TT_KEYWORD, 'def'):
             func_expr = res.register(self.func_expr())
@@ -1180,7 +1308,7 @@ class Value:
         return res.success(String(Token(type=TT_STR, value=self.token.type.lower())))
 
     def __repr__(self) -> str:
-        return f"{self.token}"
+        return f"{self.token.value}"
 
 class Number(Value):
     def __init__(self, node:NumNode|Token) -> None:
@@ -1390,7 +1518,7 @@ class String(Value):
         if other.token.type != TT_INT:
             return res.failure(TypeError(
                 self.token.pos_start.fn, self.token.pos_start.current_line,
-                f"string indices must be int not '{other.token.type.lower()}'",
+                f"Str indices must be int not '{other.token.type.lower()}'",
                 self.token.pos_start, other.token.pos_end
             ))
         if int(other.token.value) >= len(self.token.value) or int(other.token.value) <= -len(self.token.value):
@@ -1416,6 +1544,36 @@ class List(Value):
         while i < len(self.token.value):
             yield self.token.value[i]
             i+=1
+    
+    def plus(self, other:Value):
+        res = RunTimeResult()
+
+        value:list = self.token.value.copy()
+        value.append(other)
+
+        return res.success(List(Token(type=TT_LIST, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
+
+    def multiply(self, other: Number):
+        res = RunTimeResult()
+
+        if other.token.type != TT_INT:
+            return self.IllegalOperation(other, '*')
+
+        value:list = self.token.value.copy()
+        value *= other.token.value
+
+        return res.success(List(Token(type=TT_LIST, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
+
+    def power(self, other: List):
+        res = RunTimeResult()
+
+        if other.token.type != TT_LIST:
+            return self.IllegalOperation(other, '^')
+
+        value:list = self.token.value.copy()
+        value.extend(other.token.value)
+
+        return res.success(List(Token(type=TT_LIST, value=value, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
 
     def index(self, other:Number|NumNode):
         res = RunTimeResult()
@@ -1423,18 +1581,18 @@ class List(Value):
         if other.token.type != TT_INT:
             return res.failure(TypeError(
                 self.token.pos_start.fn, self.token.pos_start.current_line,
-                f"string indices must be int not '{other.token.type.lower()}'",
+                f"List indices must be int not '{other.token.type.lower()}'",
                 self.token.pos_start, other.token.pos_end
             ))
         if int(other.token.value) >= len(self.token.value) or int(other.token.value) <= -len(self.token.value):
             return res.failure(IndexError(
                 self.token.pos_start.fn, self.token.pos_start.current_line,
-                "Str index out of range",
+                "List index out of range",
                 self.token.pos_start, other.token.pos_end
             ))
         
         value = self.token.value[int(other.token.value)]
-        return res.success(String(Token(type=value.token.type, value=value.token.value, pos_start=self.token.pos_start, pos_end=other.token.pos_end)))
+        return res.success(value)
 
 #######################################
 # Functions
@@ -1620,6 +1778,10 @@ class List_(BuiltInFunction):
         
         value = list(token.value)
         type = TT_LIST
+
+        if token.type == TT_STR:
+            value = [String(Token(type=TT_STR, value=item, pos_start=token.pos_start, pos_end=token.pos_end)) for item in value]
+
         result = List(Token(type=type, value=value, pos_start=token.pos_start, pos_end=token.pos_end))
 
         return result
@@ -1694,6 +1856,10 @@ class Interpreter:
         for statement in node.exprs:
             result = res.register(self.visit(statement, symbol_table))
             if res.error: return res
+            
+            if type(result) == RunTimeResult and result.error:
+                return result
+
             if res.return_value:
                 return res.failure(InvalidSyntaxError(
                     res.return_value.token.pos_start.fn, res.return_value.token.pos_start.current_line,
@@ -1723,7 +1889,7 @@ class Interpreter:
 
         func:Function = res.register(self.visit(node.name, symbol_table))
         if res.error: return res
-
+        
         if func.token.type != TT_FUNC:
             return res.failure(TypeError(
                 func.token.pos_start.fn, func.token.pos_start.current_line,
@@ -1748,6 +1914,29 @@ class Interpreter:
 
         func = Function(node.token, node.args, node.exprs)
         symbol_table.assign(node.func_name.value, func)
+        
+        return res.success(GlobalSymbolTable.get_variable("Null"))
+
+    def visit_TryNode(self, node:TryNode, symbol_table):
+        res = RunTimeResult()
+        error_found = False
+
+        for expr in node.exprs:
+            res.register(self.visit(expr, symbol_table))
+            if res.error:
+                error_found = True 
+                res.reset()
+                break
+            if res.break_token or res.continue_token: return res
+        
+        if error_found:
+            for expr in node.except_exprs:
+                res.register(self.visit(expr, symbol_table))
+                if res.error or res.break_token or res.continue_token: return res
+
+        for expr in node.finally_exprs:
+            res.register(self.visit(expr, symbol_table))
+            if res.error or res.break_token or res.continue_token: return res
         
         return res.success(GlobalSymbolTable.get_variable("Null"))
 
@@ -1918,6 +2107,7 @@ class Interpreter:
 GlobalSymbolTable = SymbolTable()
 GlobalSymbolTable.add_keywords(
     'var', 'def',
+    'try', 'except', 'finally',
     'return', 'break', 'continue',
     'and', 'or', 'not', 
     'if', 'then', 'else', 'fi', 

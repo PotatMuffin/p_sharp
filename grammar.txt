@@ -20,11 +20,12 @@ factor  	: (PLUS|MINUS)* factor
 
 power   	: atom ((POW) factor)*
 
-atom		: INT|FLOAT|STR|LIST|IDENTIFIER
+atom		: INT|FLOAT|STR|LIST|DICT|IDENTIFIER
 			: LPAREN expr RPAREN
 			: if-expr
 			: while-expr
 			: for-expr
+			: try-expr
 
 func-expr	: KEYWORD:def IDENTIFIER LPAREN (IDENTIFIER (comma IDENTIFIER)*)? RPAREN COLON statements
 
@@ -33,4 +34,9 @@ if-expr		: KEYWORD:if expr KEYWORD:then statements
 
 while-expr  : KEYWORD:while expr KEYWORD:then statements KEYWORD:end
 
-for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER KEYWORD:in expr KEYWORD:then statements KEYWORD:end
+for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER KEYWORD:in statements KEYWORD:then statements KEYWORD:end
+
+try-expr	: KEYWORD:try COLON statements 
+			  (KEYWORD:except COLON statements)? 
+			  (KEYWORD:finally COLON statements)? 
+			  KEYWORD:end
