@@ -5,7 +5,7 @@ statement	: KEYWORD:return expr?
 			: KEYWORD:break
 			: expr
 
-expr  	    : KEYWORD:var IDENTIFIER EQ expr
+expr  	    : KEYWORD:var IDENTIFIER (EQ, PLUSEQ, MINEQ, MULEQ, DIVEQ, POWEQ) expr
 			: comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
 
 comp-expr	: not comp-expr
@@ -27,7 +27,11 @@ atom		: INT|FLOAT|STR|LIST|DICT|IDENTIFIER
 			: for-expr
 			: try-expr
 
-func-expr	: KEYWORD:def IDENTIFIER LPAREN (IDENTIFIER (comma IDENTIFIER)*)? RPAREN COLON statements
+LIST		: LSQUARE (IDENTIFIER (COMMA IDENTIFIER)*)? RSQUARE
+
+DICT		: LBRACKET (IDENTIFIER COLON expr (COMMA IDENTIFIER COLON expr)*)? RBRACKET
+
+func-expr	: KEYWORD:def IDENTIFIER LPAREN (IDENTIFIER(EQ expr)? (COMMA IDENTIFIER(EQ expr)?)*)? RPAREN COLON statements
 
 if-expr		: KEYWORD:if expr KEYWORD:then statements 
 			  (KEYWORD:else statements)? KEYWORD:fi

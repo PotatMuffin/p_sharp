@@ -58,6 +58,10 @@ class IndexError(Error):
     def __init__(self, fn, line: str, details: str, pos_start, pos_end=None) -> None:
         super().__init__(fn, line, "Index Error", details, pos_start, pos_end)
 
+class KeyError(Error):
+    def __init__(self, fn, line: str, details: str, pos_start: Position, pos_end: Position = None) -> None:
+        super().__init__(fn, line, "Key Error", details, pos_start, pos_end)
+
 #############################
 #Symbol Table
 #############################
@@ -163,6 +167,11 @@ TT_IDENTIFIER = "IDENTIFIER"
 TT_KEYWORD = "KEYWORD"
 
 TT_EQ = "EQ"
+TT_PLUSEQ = "PLUSEQ"
+TT_MINEQ = "MINEQ"
+TT_MULEQ = "MULEQ"
+TT_DIVEQ = "DIVEQ"
+TT_POWEQ = "POWEQ"
 TT_IS = "IS"
 TT_ISNOT = "ISNOT"
 TT_GT = "GT" # greater than
@@ -220,13 +229,23 @@ class Lexer:
         self.pos.back()
         return Token(type=TT_LT, pos_start=pos)
     
-    def make_equals(self):
+    def make_equals(self, token):
+        tokens = {
+            '-': TT_MIN, '-=': TT_MINEQ,
+            '+': TT_PLUS, '+=': TT_PLUSEQ,
+            '*': TT_MUL, '*=': TT_MULEQ,
+            '/': TT_DIV, '/=': TT_DIVEQ,
+            '^': TT_POW, '^=': TT_POWEQ,
+            '=': TT_EQ, '==': TT_IS
+        }
+
         pos = self.pos.copy()
         self.pos.advance()
         if self.pos.current_char == '=':
-            return Token(type=TT_IS, pos_start=pos, pos_end=self.pos.copy())
+            token += '='
+            return Token(type=tokens[token], pos_start=pos, pos_end=self.pos.copy())
         self.pos.back()
-        return Token(type=TT_EQ, pos_start=pos)
+        return Token(type=tokens[token], pos_start=pos)
     
     def make_not_equals(self):
         pos = self.pos.copy()
@@ -269,41 +288,54 @@ class Lexer:
         pos = self.pos.copy()
         string = ''
         quote = self.pos.current_char
+        escape_character = False
+
+        escaped_character = {
+            "n": "\n",
+            "t": "\t"
+        }
 
         self.pos.advance()
         while self.pos.current_char and self.pos.current_char in characters:
-            if self.pos.current_char == quote: 
-                self.pos.advance()
-                break
+            if escape_character:
+                string += escaped_character.get(self.pos.current_char, self.pos.current_char)
+                escape_character = False
+            else:
+                if self.pos.current_char == quote: 
+                    self.pos.advance()
+                    break
 
-            string += self.pos.current_char
+                if self.pos.current_char == "\\":
+                    escape_character = True
+                else:
+                    string += self.pos.current_char
             self.pos.advance()
         
         pos_end = self.pos.copy()
         pos_end.back()
 
         return Token(type=TT_STR, value=string, pos_start=pos, pos_end=pos_end)
-    
+
     def make_tokens(self):
         tokens = []
         
         chars = {
-        '+': lambda: tokens.append(Token(type=TT_PLUS, pos_start=self.pos.copy())), 
-        '-': lambda: tokens.append(Token(type=TT_MIN, pos_start=self.pos.copy())), 
-        '*': lambda: tokens.append(Token(type=TT_MUL, pos_start=self.pos.copy())), 
-        '/': lambda: tokens.append(Token(type=TT_DIV, pos_start=self.pos.copy())),
         '(': lambda: tokens.append(Token(type=TT_LPAREN, pos_start=self.pos.copy())),
         ')': lambda: tokens.append(Token(type=TT_RPAREN, pos_start=self.pos.copy())),
         '[': lambda: tokens.append(Token(type=TT_LSQUARE, pos_start=self.pos.copy())),
         ']': lambda: tokens.append(Token(type=TT_RSQUARE, pos_start=self.pos.copy())),
         '{': lambda: tokens.append(Token(type=TT_LBRACKET, pos_start=self.pos.copy())),
         '}': lambda: tokens.append(Token(type=TT_RBRACKET, pos_start=self.pos.copy())),
-        '^': lambda: tokens.append(Token(type=TT_POW, pos_start=self.pos.copy())),
         ';': lambda: tokens.append(Token(type=TT_NEWLINE, pos_start=self.pos.copy())),
         ',': lambda: tokens.append(Token(type=TT_COMMA, pos_start=self.pos.copy())),
         ':': lambda: tokens.append(Token(type=TT_COLON, pos_start=self.pos.copy())),
+        '+': lambda: tokens.append(self.make_equals('+')), 
+        '-': lambda: tokens.append(self.make_equals('-')), 
+        '*': lambda: tokens.append(self.make_equals('*')), 
+        '/': lambda: tokens.append(self.make_equals('/')),
+        '^': lambda: tokens.append(self.make_equals('^')),
+        '=': lambda: tokens.append(self.make_equals('=')),
         '!': lambda: tokens.append(self.make_not_equals()),
-        '=': lambda: tokens.append(self.make_equals()),
         '>': lambda: tokens.append(self.make_greater_than()),
         '<': lambda: tokens.append(self.make_lower_than())
         }
@@ -442,7 +474,7 @@ class TryNode:
         return f"try: {self.exprs} \nexcept: {self.except_exprs} \nfinally: {self.finally_exprs}"
 
 class FuncDefNode:
-    def __init__(self, func_name:Token, arguments:list[Token], expressions:list, token) -> None:
+    def __init__(self, func_name:Token, arguments:list[tuple[Token, Token]], expressions:list, token) -> None:
         self.func_name = func_name
         self.args = arguments
         self.exprs = expressions
@@ -466,6 +498,13 @@ class ListNode:
     
     def __repr__(self) -> str:
         return f"{self.exprs}"
+
+class DictNode:
+    def __init__(self, elements:list[tuple]) -> None:
+        self.elements = elements
+    
+    def __repr__(self) -> str:
+        return f"{self.elements}"
 
 class ReturnNode:
     def __init__(self, token, value) -> None:
@@ -730,7 +769,7 @@ class Parser:
         else_case = False
 
         self.advance()
-        condition = res.register(self.statement())
+        condition = res.register(self.expr())
         if res.error: return res
 
         if not self.current_token.matches(TT_KEYWORD, "then"):
@@ -781,6 +820,7 @@ class Parser:
 
     def func_expr(self):
         res = ParseResult()
+        should_have_default_value = False
         arguments = []
         expressions = []
 
@@ -804,8 +844,16 @@ class Parser:
         self.advance()
 
         if self.current_token.type == TT_IDENTIFIER:
-            arguments.append(self.current_token)
+            token_ = self.current_token
+            default_value = None
             self.advance()
+            if self.current_token.type == TT_EQ:
+                should_have_default_value = True
+                self.advance()
+                default_value = res.register(self.expr())
+                if res.error: return res
+            
+            arguments.append((token_, default_value))
 
         while self.current_token.type == TT_COMMA:
             self.advance()
@@ -817,8 +865,22 @@ class Parser:
                     self.current_token.pos_start, self.current_token.pos_end
                 ))
 
-            arguments.append(self.current_token)
+            token_ = self.current_token
+            default_value = None
             self.advance()
+            if self.current_token.type == TT_EQ:
+                should_have_default_value = True
+                self.advance()
+                default_value = res.register(self.expr())
+                if res.error: return res
+            elif should_have_default_value:
+                return res.failure(InvalidSyntaxError(
+                    token_.pos_start.fn, token_.pos_start.current_line,
+                    f"Non-default argument can not follow a default argument",
+                    token_.pos_start, token_.pos_end
+                ))
+
+            arguments.append((token_, default_value))
 
         if self.current_token.type != TT_RPAREN:
             return res.failure(InvalidSyntaxError(
@@ -854,95 +916,143 @@ class Parser:
         
         return res.success(FuncDefNode(func_name, arguments, expressions, token))
 
+    def dict(self):
+        res = ParseResult()
+        self.advance()
+        
+        while self.current_token.type == TT_NEWLINE:
+            self.advance()
+
+        elements = []
+        if self.current_token.type != TT_RBRACKET:
+            key = res.register(self.expr())
+            if res.error: return res
+        
+            if self.current_token.type != TT_COLON:
+                return res.failure(InvalidSyntaxError(
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                    "Expected ':'",
+                    self.current_token.pos_start, self.current_token.pos_end
+                ))
+            self.advance()
+
+            value = res.register(self.expr())
+            if res.error: return res
+            elements.append((key, value))
+        
+        while self.current_token.type == TT_COMMA:
+            self.advance()
+
+            while self.current_token.type == TT_NEWLINE:
+                self.advance()
+            
+            key = res.register(self.expr())
+            if res.error: return res
+
+            if self.current_token.type != TT_COLON:
+                return res.failure(InvalidSyntaxError(
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                    "Expected ':'",
+                    self.current_token.pos_start, self.current_token.pos_end
+                ))
+            self.advance()
+
+            value = res.register(self.expr())
+            if res.error: return res
+            elements.append((key, value))
+        self.advance()
+
+        return res.success(DictNode(elements))
+
+    def list(self):
+        res = ParseResult()
+        self.advance()
+        
+        while self.current_token.type == TT_NEWLINE:
+            self.advance()
+
+        expressions = []
+        if self.current_token.type != TT_RSQUARE:
+            expr = res.register(self.expr())
+            if res.error: return res
+            expressions.append(expr)
+
+        while self.current_token.type == TT_COMMA:
+            self.advance()
+
+            while self.current_token.type == TT_NEWLINE:
+                self.advance()
+
+            expr = res.register(self.expr())
+            if res.error: return res
+            expressions.append(expr)
+
+        while self.current_token.type == TT_NEWLINE:
+            self.advance()
+
+        if self.current_token.type != TT_RSQUARE:
+            return res.failure(InvalidSyntaxError(
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                "Expected ',' or ']'",
+                self.current_token.pos_start, self.current_token.pos_end
+            ))
+        self.advance()
+
+        return res.success(ListNode(expressions))
+
+    def index(self, token, node_type):
+        res = ParseResult()
+        self.advance()
+        index = res.register(self.statement())
+
+        if self.current_token.type != TT_RSQUARE:
+            return res.failure(TypeError(
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                "Expected ',' or ']'",
+                self.current_token.pos_start, self.current_token.pos_end
+            ))
+        self.advance()
+        return res.success(IndexAccessNode(node_type(token), index))
+
     def atom(self):
         res = ParseResult()
         token = self.current_token
 
         if self.current_token.type == TT_LSQUARE:
-            self.advance()
-            
-            while self.current_token.type == TT_NEWLINE:
-                self.advance()
+            list = res.register(self.list())
+            if res.error: return res
 
-            expressions = []
-            if self.current_token.type != TT_RSQUARE:
-                expr = res.register(self.expr())
-                if res.error: return res
-                expressions.append(expr)
+            if self.current_token.type == TT_LSQUARE:
+                return self.index(list.exprs, ListNode)
+            return res.success(list)
 
-            while self.current_token.type == TT_COMMA:
-                self.advance()
+        if self.current_token.type == TT_LBRACKET:
+            dict = res.register(self.dict())
+            if res.error: return res
 
-                while self.current_token.type == TT_NEWLINE:
-                    self.advance()
-
-                expr = res.register(self.expr())
-                if res.error: return res
-                expressions.append(expr)
-
-            while self.current_token.type == TT_NEWLINE:
-                self.advance()
-
-            if self.current_token.type != TT_RSQUARE:
-                return res.failure(InvalidSyntaxError(
-                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                    "Expected ',' or ']'",
-                    self.current_token.pos_start, self.current_token.pos_end
-                ))
-            
-            self.advance()
-            return res.success(ListNode(expressions))
+            if self.current_token.type == TT_LSQUARE:
+                return self.index(dict.elements, DictNode)
+            return res.success(dict)
 
         if token.type in (TT_INT, TT_FLOAT):
             self.advance()
 
             if self.current_token.type == TT_LSQUARE:
-                self.advance()
-                index = res.register(self.statement())
-
-                if self.current_token.type != TT_RSQUARE:
-                    return res.failure(TypeError(
-                        self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                        "Expected ',' or ']'",
-                        self.current_token.pos_start, self.current_token.pos_end
-                    ))
-                self.advance()
-                return res.success(IndexAccessNode(NumNode(token), index))
+                return self.index(token, NumNode)
             return res.success(NumNode(token))
         
         if token.type == TT_STR:
             self.advance()
 
             if self.current_token.type == TT_LSQUARE:
-                self.advance()
-                index = res.register(self.statement())
-
-                if self.current_token.type != TT_RSQUARE:
-                    return res.failure(TypeError(
-                        self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                        "Expected ']'",
-                        self.current_token.pos_start, self.current_token.pos_end
-                    ))
-                self.advance()
-                return res.success(IndexAccessNode(StrNode(token), index))
-
+                return self.index(token, StrNode)
             return res.success(StrNode(token))
 
         if token.type == TT_IDENTIFIER:
             self.advance()
 
             if self.current_token.type == TT_LSQUARE:
-                self.advance()
-                index = res.register(self.statement())
-
-                if self.current_token.type != TT_RSQUARE:
-                    return res.failure(TypeError(
-                        self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                        "Expected ']'",
-                        self.current_token.pos_start, self.current_token.pos_end
-                    ))
-                self.advance()
-                return res.success(IndexAccessNode(VarNode(token), index))
+                return self.index(token, VarNode)
 
             if self.current_token.type == TT_LPAREN:
                 token_ = Token(type=TT_FUNC, value=token.value, pos_start=token.pos_start)
@@ -971,7 +1081,6 @@ class Parser:
                 self.advance()
 
                 return res.success(CallNode(VarNode(token), args, token_))
-
             return res.success(VarNode(token))
         
         if token.type == TT_LPAREN:
@@ -1075,13 +1184,24 @@ class Parser:
             var_name = self.current_token
             self.advance()
 
-            if self.current_token.type != TT_EQ:
+            if self.current_token.type not in (TT_EQ, TT_DIVEQ, TT_MINEQ, TT_MULEQ, TT_PLUSEQ, TT_POWEQ):
                 return res.failure(InvalidSyntaxError(
                     self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                    "Expected '='",
+                    "Expected '=', '-=', '+=', '*=', '/=' or '^='",
                     self.current_token.pos_start, self.current_token.pos_end
                 ))
             
+            if self.current_token.type in (TT_DIVEQ, TT_MINEQ, TT_MULEQ, TT_PLUSEQ, TT_POWEQ):
+                BinOps = {TT_DIVEQ: TT_DIV, TT_MINEQ: TT_MIN, TT_MULEQ: TT_MUL, TT_PLUSEQ: TT_PLUS, TT_POWEQ: TT_POW}
+                BinOp = Token(type=BinOps[self.current_token.type], pos_start=self.current_token.pos_start, pos_end=self.current_token.pos_end)
+                self.advance()
+
+                expr = res.register(self.expr())
+                if res.error: return res
+
+                expr = BinOpNode(VarNode(var_name), BinOp, expr)
+                return res.success(VarAssignNode(var_name, expr))
+
             self.advance()
             expr = res.register(self.expr())
             if res.error: return res
@@ -1594,6 +1714,30 @@ class List(Value):
         value = self.token.value[int(other.token.value)]
         return res.success(value)
 
+    def length(self):
+        res = RunTimeResult()
+        return res.success(Number(Token(type=TT_INT, value=len(self.token.value), pos_start=self.token.pos_start, pos_end=self.token.pos_end)))
+
+class Dictionary(Value):
+    def __init__(self, node: DictNode|Token) -> None:
+        super().__init__(node)
+
+    def index(self, other: Value):
+        res = RunTimeResult()
+
+        if other.token.value not in self.token.value:
+            return res.failure(KeyError(
+                self.token.pos_start.fn, self.token.pos_start.current_line,
+                f"Dictionary has no key {other.token.value}",
+                self.token.pos_start, other.token.pos_end
+            ))
+        
+        return res.success(self.token.value[other.token.value])
+
+    def length(self):
+        res = RunTimeResult()
+        return res.success(Number(Token(type=TT_INT, value=len(self.token.value), pos_start=self.token.pos_start, pos_end=self.token.pos_end)))
+
 #######################################
 # Functions
 #######################################
@@ -1610,10 +1754,24 @@ class Function(Value):
 
     def check_args(self, args):
         res = RunTimeResult()
-        if len(self.args) != len(args):
+        required_args = 0
+        optional_args = 0
+
+        for arg in self.args:
+            if not arg[1]:
+                required_args += 1
+            else:
+                optional_args += 1
+
+        if len(self.args) < len(args) or required_args > len(args):
+            if optional_args:
+                details = f"takes from {required_args} to {len(self.args)}"
+            else:
+                details = f"takes {required_args}"
+
             return res.failure(TypeError(
                 self.token.pos_start.fn, self.token.pos_start.current_line,
-                f"{self.token.value} takes {len(self.args)} arguments but {len(args)} were given",
+                f"{self.token.value} {details} argument(s) but {len(args)} were given",
                 self.token.pos_start, self.token.pos_end
             ))
 
@@ -1622,9 +1780,13 @@ class Function(Value):
         res.register(self.check_args(args))
         if res.error: return res
 
+        if len(self.args) > len(args): args.extend([None]*(len(self.args)-len(args)))
+
         for i, var in enumerate(self.args):
-            self.symbol_table.assign(var.value, args[i])
-    
+            if not args[i]: arg = var[1]
+            else: arg = args[i]
+            self.symbol_table.assign(var[0].value, arg)
+        
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
         self.new_symbol_table(parent_symbol_table)
@@ -1640,14 +1802,14 @@ class Function(Value):
         return res.success(GlobalSymbolTable.get_variable("Null"))
 
     def __repr__(self) -> str:
-        return f"{self.token.value}({self.args})"
+        return f"{self.token.value}"
 
 class BuiltInFunction(Function):
     def __init__(self, func_name, args:list[str]) -> None:
         self.token = Token(type=TT_FUNC, value=func_name)
         self.args = []
         for arg in args:
-            self.args.append(Token(TT_IDENTIFIER, arg))
+            self.args.append((Token(TT_IDENTIFIER, arg[0]), arg[1]))
     
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1657,7 +1819,7 @@ class BuiltInFunction(Function):
 
 class Print(BuiltInFunction):
     def __init__(self) -> None: 
-        super().__init__("<print>", ["value"])
+        super().__init__("<print>", [("value", None)])
     
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1674,7 +1836,7 @@ class Print(BuiltInFunction):
 
 class Length(BuiltInFunction):
     def __init__(self) -> None:
-        super().__init__("<length>", ["value"])
+        super().__init__("<length>", [("value", None)])
 
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1685,7 +1847,7 @@ class Length(BuiltInFunction):
 
 class Type(BuiltInFunction):
     def __init__(self) -> None:
-        super().__init__("<type>", ["value"])
+        super().__init__("<type>", [("value", None)])
     
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1696,7 +1858,7 @@ class Type(BuiltInFunction):
 
 class Str(BuiltInFunction):
     def __init__(self) -> None:
-        super().__init__("<str>", ["value"])
+        super().__init__("<str>", [("value", None)])
     
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1711,7 +1873,7 @@ class Str(BuiltInFunction):
 
 class Int(BuiltInFunction):
     def __init__(self) -> None:
-        super().__init__("<int>", ["value"])
+        super().__init__("<int>", [("value", None)])
     
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1736,7 +1898,7 @@ class Int(BuiltInFunction):
 
 class Float(BuiltInFunction):
     def __init__(self) -> None:
-        super().__init__("<float>", ["value"])
+        super().__init__("<float>", [("value", None)])
 
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1761,7 +1923,7 @@ class Float(BuiltInFunction):
 
 class List_(BuiltInFunction):
     def __init__(self) -> None:
-        super().__init__("<list>", ["value"])
+        super().__init__("<list>", [("value", None)])
     
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1788,7 +1950,7 @@ class List_(BuiltInFunction):
 
 class Execute(BuiltInFunction):
     def __init__(self) -> None:
-        super().__init__("<execute>", ["input"])
+        super().__init__("<execute>", [("input", None)])
     
     def execute(self, args, parent_symbol_table):
         res = RunTimeResult()
@@ -1811,6 +1973,50 @@ class Exit(BuiltInFunction):
         if res.error: return res
 
         exit()
+
+class Add_Element(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("<add_element>", [("dict", None), ("key", None), ("value", None)])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        dict:Dictionary = self.symbol_table.get_variable("dict")
+        if dict.token.type != TT_DICT:
+            return res.failure(TypeError(
+                dict.token.pos_start.fn, dict.token.pos_start.current_line,
+                f"Expected dict not {dict.token.type.lower()}",
+                dict.token.pos_start, dict.token.pos_end
+            ))
+        
+        key = self.symbol_table.get_variable("key")
+        if key.token.type not in (TT_STR, TT_INT, TT_FLOAT): 
+            return res.failure(TypeError(
+                key.token.pos_start.fn, key.token.pos_start.current_line,
+                f"Key can not be {key.token.type.lower()}",
+                key.token.pos_start, key.token.pos_end
+            ))
+
+        value = self.symbol_table.get_variable("value")
+        dict.token.value[key] = value
+        dict.token.pos_end = value.token.pos_end
+
+        return res.success(dict)
+
+class Input(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("<input>", [("prompt", String(Token(type=TT_STR, value="")))])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        prompt = self.symbol_table.get_variable("prompt")
+        value = input(prompt.token.value)
+        return res.success(String(Token(type=TT_STR, value=value, pos_start=prompt.token.pos_start, pos_end=prompt.token.pos_end)))
 
 #######################################
 # Interpreter
@@ -1848,6 +2054,33 @@ class Interpreter:
         value.token.pos_start = node.token.pos_start
         value.token.pos_end = node.token.pos_end
         return res.Return(value)
+
+    def visit_DictNode(self, node:DictNode, symbol_table):
+        res = RunTimeResult()
+        dict_ = {}
+        keys = []
+
+        for element in node.elements:
+            key = res.register(self.visit(element[0], symbol_table))
+            if res.error: return res
+
+            if key.token.type not in (TT_STR, TT_INT, TT_FLOAT): 
+                return res.failure(TypeError(
+                    key.token.pos_start.fn, key.token.pos_start.current_line,
+                    f"Key can not be {key.token.type.lower()}",
+                    key.token.pos_start, key.token.pos_end
+                ))
+
+            value = res.register(self.visit(element[1], symbol_table))
+            if res.error: return res
+            dict_[key.token.value] = value
+
+        if len(keys): pos_start = keys[0].token.pos_start
+        else: pos_start = None
+        if len(keys) > 1: pos_end = keys[-1].token.pos_end
+        else: pos_end = None
+
+        return res.success(Dictionary(Token(type=TT_DICT, value=dict_, pos_start=pos_start, pos_end=pos_end)))
 
     def visit_ListNode(self, node:ListNode, symbol_table):
         res = RunTimeResult()
@@ -2106,7 +2339,7 @@ class Interpreter:
 
 GlobalSymbolTable = SymbolTable()
 GlobalSymbolTable.add_keywords(
-    'var', 'def',
+    'var', 'def', 'class',
     'try', 'except', 'finally',
     'return', 'break', 'continue',
     'and', 'or', 'not', 
@@ -2126,7 +2359,9 @@ GlobalSymbolTable.assign_multiple(
     ("float", Float()),
     ("list", List_()),
     ("execute", Execute()),
-    ("exit", Exit())
+    ("exit", Exit()),
+    ("add_element", Add_Element()),
+    ("input", Input())
 )
 
 def Main(input, fn):
