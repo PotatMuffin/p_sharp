@@ -25,6 +25,7 @@ atom		: INT|FLOAT|STR|LIST|DICT|IDENTIFIER
 			: if-expr
 			: while-expr
 			: for-expr
+			: class-expr
 			: try-expr
 
 LIST		: LSQUARE (IDENTIFIER (COMMA IDENTIFIER)*)? RSQUARE
@@ -38,7 +39,9 @@ if-expr		: KEYWORD:if expr KEYWORD:then statements
 
 while-expr  : KEYWORD:while expr KEYWORD:then statements KEYWORD:end
 
-for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER KEYWORD:in statements KEYWORD:then statements KEYWORD:end
+for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER KEYWORD:in statements KEYWORD:then NEWLINE* statement* NEWLINE* KEYWORD:end
+
+class-expr	: KEYWORD:class IDENTIFIER (LPAREN IDENTIFIER RPAREN)? COLON statements
 
 try-expr	: KEYWORD:try COLON statements 
 			  (KEYWORD:except COLON statements)? 

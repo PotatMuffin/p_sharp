@@ -1,5 +1,6 @@
 from __future__ import annotations
 from arrows import add_arrows
+from os import path
 import math
 import string
 
@@ -62,6 +63,10 @@ class KeyError(Error):
     def __init__(self, fn, line: str, details: str, pos_start: Position, pos_end: Position = None) -> None:
         super().__init__(fn, line, "Key Error", details, pos_start, pos_end)
 
+class AttributeError_(Error):
+    def __init__(self, fn, line: str, details: str, pos_start: Position, pos_end: Position = None) -> None:
+        super().__init__(fn, line, "Attribute error", details, pos_start, pos_end)
+
 #############################
 #Symbol Table
 #############################
@@ -75,7 +80,7 @@ class SymbolTable:
     def get_variable(self, variable):
         value = self.symbols.get(variable, None)
         if self.parent and not value:
-            value = self.parent.symbols.get(variable, None)
+            value = self.parent.get_variable(variable)
         return value
     
     def add_keywords(self, *kw):
@@ -88,6 +93,12 @@ class SymbolTable:
     def assign_multiple(self, *vars:tuple[tuple]):
         for var in vars:
             self.symbols[var[0]] = var[1]
+
+    def copy(self):
+        new_table = SymbolTable()
+        new_table.symbols = self.symbols.copy()
+        new_table.parent = self.parent
+        return new_table
 
 #############################
 # Position
@@ -148,6 +159,7 @@ TT_POW = "POW"
 
 TT_COMMA = "COMMA"
 TT_COLON = "COLON"
+TT_DOT = "DOT"
 
 TT_LPAREN = "LPAREN"
 TT_RPAREN = "RPAREN"
@@ -162,6 +174,8 @@ TT_STR = "STR"
 TT_LIST = "LIST"
 TT_DICT = "DICT"
 TT_FUNC = "FUNC"
+TT_METHOD = "METHOD"
+TT_CLASS = "CLASS"
 
 TT_IDENTIFIER = "IDENTIFIER"
 TT_KEYWORD = "KEYWORD"
@@ -329,6 +343,7 @@ class Lexer:
         ';': lambda: tokens.append(Token(type=TT_NEWLINE, pos_start=self.pos.copy())),
         ',': lambda: tokens.append(Token(type=TT_COMMA, pos_start=self.pos.copy())),
         ':': lambda: tokens.append(Token(type=TT_COLON, pos_start=self.pos.copy())),
+        '.': lambda: tokens.append(Token(type=TT_DOT, pos_start=self.pos.copy())),
         '+': lambda: tokens.append(self.make_equals('+')), 
         '-': lambda: tokens.append(self.make_equals('-')), 
         '*': lambda: tokens.append(self.make_equals('*')), 
@@ -430,6 +445,23 @@ class VarNode:
     def __repr__(self) -> str:
         return f"{self.var}"
 
+class AttributeAssignNode:
+    def __init__(self, class_name, attribute, value) -> None:
+        self.class_name = class_name
+        self.attribute = attribute
+        self.value = value
+    
+    def __repr__(self) -> str:
+        return f"{self.class_name}.{self.attribute} = {self.value}"
+
+class AttributeNode:
+    def __init__(self, class_name, attribute) -> None:
+        self.class_name = class_name
+        self.attribute = attribute
+    
+    def __repr__(self) -> str:
+        return f"{self.class_name}.{self.attribute}"
+
 class IndexAccessNode:
     def __init__(self, token:Token, index:NumNode) -> None:
         self.token = token
@@ -474,7 +506,7 @@ class TryNode:
         return f"try: {self.exprs} \nexcept: {self.except_exprs} \nfinally: {self.finally_exprs}"
 
 class FuncDefNode:
-    def __init__(self, func_name:Token, arguments:list[tuple[Token, Token]], expressions:list, token) -> None:
+    def __init__(self, func_name:Token, arguments:list[tuple[Token, Token|None]], expressions:list, token) -> None:
         self.func_name = func_name
         self.args = arguments
         self.exprs = expressions
@@ -483,11 +515,21 @@ class FuncDefNode:
     def __repr__(self) -> str:
         return f"def {self.func_name}({self.args}): {self.exprs}"
 
+class ClassNode:
+    def __init__(self, class_name:Token, statements:list, parent:Token=None) -> None:
+        self.class_name = class_name
+        self.statements = statements
+        self.parent = parent
+    
+    def __repr__(self) -> str:
+        return f"class {self.class_name}{f'({self.inheritance}):' if self.inheritance else ':'}"
+
 class CallNode:
-    def __init__(self, func_name, args, token) -> None:
+    def __init__(self, func_name, args, token, cls=None) -> None:
         self.name = func_name
         self.args = args
         self.token = token
+        self.cls = cls
 
     def __repr__(self) -> str:
         return f"{self.name}({self.args})"
@@ -507,7 +549,7 @@ class DictNode:
         return f"{self.elements}"
 
 class ReturnNode:
-    def __init__(self, token, value) -> None:
+    def __init__(self, token:Token, value) -> None:
         self.token = token
         self.return_value = value
     
@@ -515,14 +557,14 @@ class ReturnNode:
         return f"return {self.return_value}"
 
 class BreakNode:
-    def __init__(self, token) -> None:
+    def __init__(self, token:Token) -> None:
         self.token = token
     
     def __repr__(self) -> str:
         f"{self.token}"
 
 class ContinueNode:
-    def __init__(self, token) -> None:
+    def __init__(self, token:Token) -> None:
         self.token = token
 
 #############################
@@ -668,6 +710,69 @@ class Parser:
                 self.advance()
         
         return res.success(TryNode(expressions, except_expressions, finally_expressions))
+
+    def class_expr(self):
+        res = ParseResult()
+        parent = None
+        statements = []
+        self.advance()
+
+        if self.current_token.type != TT_IDENTIFIER:
+            return res.failure(InvalidSyntaxError(
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                "Expected Identifier",
+                self.current_token.pos_start, self.current_token.pos_end
+            ))
+
+        class_name = self.current_token
+        class_name.type = TT_CLASS
+        self.advance()
+
+        if self.current_token.type == TT_LPAREN:
+            self.advance()
+            if self.current_token.type != TT_IDENTIFIER:
+                return res.failure(InvalidSyntaxError(
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                    "Expected Identifier", 
+                    self.current_token.pos_start, self.current_token.pos_end
+                ))
+            
+            parent = VarNode(self.current_token)
+            self.advance()
+
+            if self.current_token.type != TT_RPAREN:
+                return res.failure(InvalidSyntaxError(
+                    self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                    "Expected ')",
+                    self.current_token.pos_start, self.current_token.pos_end
+                ))
+            self.advance()
+        
+        if self.current_token.type != TT_COLON:
+            return res.failure(InvalidSyntaxError(
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                "Expected ':'",
+                self.current_token.pos_start, self.current_token.pos_end
+            ))
+        self.advance()
+
+        while self.current_token.type != TT_EOF:
+            if self.current_token.type == TT_NEWLINE:
+                self.advance()
+                continue
+            
+            if self.current_token.matches(TT_KEYWORD, "end"):
+                self.advance()
+                break
+                
+            statement = res.register(self.statement())
+            if res.error: return res
+            statements.append(statement)
+
+            if self.current_token.type != TT_NEWLINE: break
+            self.advance()
+        
+        return res.success(ClassNode(class_name, statements, parent))
 
     def for_expr(self):
         res = ParseResult()
@@ -1000,7 +1105,7 @@ class Parser:
 
         return res.success(ListNode(expressions))
 
-    def index(self, token, node_type):
+    def index(self, node):
         res = ParseResult()
         self.advance()
         index = res.register(self.statement())
@@ -1012,7 +1117,77 @@ class Parser:
                 self.current_token.pos_start, self.current_token.pos_end
             ))
         self.advance()
-        return res.success(IndexAccessNode(node_type(token), index))
+        return res.success(IndexAccessNode(node, index))
+
+    def access_attribute(self, token, node=None):
+        res = ParseResult()
+
+        self.advance()
+        attribute = self.current_token
+        node = AttributeNode(node or VarNode(token), attribute)
+
+        self.advance()
+        if self.current_token.type == TT_LPAREN:
+            node = res.register(self.call(token, node))
+            if res.error: return res
+            node.cls = VarNode(token)
+        
+        if self.current_token.type == TT_DOT:
+            node = res.register(self.access_attribute(token, node))
+            if res.error: return res
+
+        if self.current_token.type == TT_LSQUARE:
+            node = res.register(self.index(node))
+        
+        if self.current_token.type in (TT_EQ, TT_DIVEQ, TT_MINEQ, TT_MULEQ, TT_PLUSEQ, TT_POWEQ):
+            op = self.current_token
+            self.advance()
+            value = res.register(self.expr())
+            if res.error: return res
+
+            if op.type in (TT_DIVEQ, TT_MINEQ, TT_MULEQ, TT_PLUSEQ, TT_POWEQ):
+                BinOps = {TT_DIVEQ: TT_DIV, TT_MINEQ: TT_MIN, TT_MULEQ: TT_MUL, TT_PLUSEQ: TT_PLUS, TT_POWEQ: TT_POW}
+                BinOp = Token(type=BinOps[op.type], pos_start=self.current_token.pos_start, pos_end=self.current_token.pos_end)
+
+                expr = BinOpNode(AttributeNode(node.class_name if type(node.class_name) == AttributeNode else VarNode(token), attribute), BinOp, value)
+                node = AttributeAssignNode(node.class_name if type(node.class_name) == AttributeNode else VarNode(token), attribute, expr)
+            else:
+                node = AttributeAssignNode(node.class_name if type(node.class_name) == AttributeNode else VarNode(token), attribute, value)
+        return res.success(node)
+
+    def call(self, token, node=None):
+        res = ParseResult()
+        args = []
+
+        self.advance()
+        if self.current_token.type != TT_RPAREN:
+            arg = res.register(self.statement())
+            if res.error: return res
+
+            args.append(arg)
+            while self.current_token.type == TT_COMMA:
+                self.advance()
+                arg = res.register(self.statement())
+                if res.error: return res
+
+                args.append(arg)
+            
+        if self.current_token.type != TT_RPAREN:
+            return res.failure(TypeError(
+                self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
+                "Expected ')'",
+                self.current_token.pos_start, self.current_token.pos_end
+            ))
+        token.pos_end = self.current_token.pos_end
+        self.advance()
+        
+        node = CallNode(node or VarNode(token), args, token)
+        
+        if self.current_token.type == TT_LPAREN:
+            node = res.register(self.call(node.token, node))
+            if res.error: return res
+
+        return res.success(node)
 
     def atom(self):
         res = ParseResult()
@@ -1023,7 +1198,7 @@ class Parser:
             if res.error: return res
 
             if self.current_token.type == TT_LSQUARE:
-                return self.index(list.exprs, ListNode)
+                return self.index(ListNode(list.exprs))
             return res.success(list)
 
         if self.current_token.type == TT_LBRACKET:
@@ -1031,58 +1206,36 @@ class Parser:
             if res.error: return res
 
             if self.current_token.type == TT_LSQUARE:
-                return self.index(dict.elements, DictNode)
+                return self.index(DictNode(dict.elements))
             return res.success(dict)
 
         if token.type in (TT_INT, TT_FLOAT):
             self.advance()
 
             if self.current_token.type == TT_LSQUARE:
-                return self.index(token, NumNode)
+                return self.index(NumNode(token))
             return res.success(NumNode(token))
         
         if token.type == TT_STR:
             self.advance()
 
             if self.current_token.type == TT_LSQUARE:
-                return self.index(token, StrNode)
+                return self.index(StrNode(token))
             return res.success(StrNode(token))
 
         if token.type == TT_IDENTIFIER:
             self.advance()
 
             if self.current_token.type == TT_LSQUARE:
-                return self.index(token, VarNode)
+                return self.index(VarNode(token))
+
+            if self.current_token.type == TT_DOT:
+                return self.access_attribute(token)
 
             if self.current_token.type == TT_LPAREN:
-                token_ = Token(type=TT_FUNC, value=token.value, pos_start=token.pos_start)
-                args = []
-
-                self.advance()
-                if self.current_token.type != TT_RPAREN:
-                    arg = res.register(self.statement())
-                    if res.error: return res
-
-                    args.append(arg)
-                    while self.current_token.type == TT_COMMA:
-                        self.advance()
-                        arg = res.register(self.statement())
-                        if res.error: return res
-
-                        args.append(arg)
-                    
-                if self.current_token.type != TT_RPAREN:
-                    return res.failure(TypeError(
-                        self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
-                        "Expected ')'",
-                        self.current_token.pos_start, self.current_token.pos_end
-                    ))
-                token_.pos_end = self.current_token.pos_end
-                self.advance()
-
-                return res.success(CallNode(VarNode(token), args, token_))
+                return self.call(token)
             return res.success(VarNode(token))
-        
+
         if token.type == TT_LPAREN:
             self.advance()
             expr = res.register(self.statement())
@@ -1126,6 +1279,12 @@ class Parser:
             if res.error: return res
 
             return res.success(func_expr)
+
+        if self.current_token.matches(TT_KEYWORD, 'class'):
+            class_expr = res.register(self.class_expr())
+            if res.error: return res
+
+            return res.success(class_expr)
 
         return res.failure(InvalidSyntaxError(
             self.current_token.pos_start.fn, self.current_token.pos_start.current_line,
@@ -1738,6 +1897,23 @@ class Dictionary(Value):
         res = RunTimeResult()
         return res.success(Number(Token(type=TT_INT, value=len(self.token.value), pos_start=self.token.pos_start, pos_end=self.token.pos_end)))
 
+class Class(Value):
+    def __init__(self, token:Token, symbol_table:SymbolTable, init=False) -> None:
+        self.token = token
+        self.symbol_table = symbol_table
+        self.inizitialized = init
+    
+    def Initialize(self, args:list):
+        res = RunTimeResult()
+        self.inizitialized = True
+
+        func:Function = self.symbol_table.get_variable("init")
+        if func and func.token.type == TT_FUNC:
+            res.register(func.execute(args, self.symbol_table))
+            if res.error: return res
+
+        return res.success(Class(self.token, self.symbol_table.copy(), self.inizitialized))
+
 #######################################
 # Functions
 #######################################
@@ -2018,6 +2194,68 @@ class Input(BuiltInFunction):
         value = input(prompt.token.value)
         return res.success(String(Token(type=TT_STR, value=value, pos_start=prompt.token.pos_start, pos_end=prompt.token.pos_end)))
 
+class ReadFile(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("<read_file>", [("file", None)])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        file = self.symbol_table.get_variable("file")
+
+        if not path.isfile(file.token.value):
+            return res.failure(NameError(
+                file.token.pos_start.fn, file.token.pos_start.current_line,
+                f"No such file or directory: '{file.token.value}'",
+                file.token.pos_start, file.token.pos_end
+            ))
+
+        with open(file.token.value, 'r') as f:
+            try:
+                value = f.read()
+            except:
+                return res.failure(ValueError(
+                    file.token.pos_start.fn, file.token.pos_start.current_line,
+                    "Can't read the file's content",
+                    file.token.pos_start, file.token.pos_end
+                ))
+
+        return res.success(String(Token(type=TT_STR, value=value)))
+
+class WriteFile(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("<write_file>", [("file", None), ("content", None)])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        with open(self.symbol_table.get_variable("file").token.value, 'w') as f:
+            f.write(self.symbol_table.get_variable("content").token.value)
+        
+        return res.success(GlobalSymbolTable.get_variable("Null"))
+    
+class ReadToFile(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("<read_to>", [("fileToRead", None), ("fileToWrite", None)])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        read_file = ReadFile()
+        write_file = WriteFile()
+
+        file = self.symbol_table.get_variable("fileToRead")
+        content = res.register(read_file.execute([file], parent_symbol_table))
+        
+        file = self.symbol_table.get_variable("fileToWrite")
+        return write_file.execute([file, content], parent_symbol_table)
+
 #######################################
 # Interpreter
 #######################################
@@ -2117,17 +2355,41 @@ class Interpreter:
         
         return res.success(List(Token(type=TT_LIST, value=results, pos_start=pos_start, pos_end=pos_end)))
 
+    def visit_ClassNode(self, node:ClassNode, symbol_table:SymbolTable):
+        res = RunTimeResult()
+        class_symbol_table = SymbolTable(symbol_table)
+
+        if node.parent:
+            parent = res.register(self.visit(node.parent, symbol_table))
+            if res.error: return res
+
+            if parent.token.type != TT_CLASS:
+                return res.failure(TypeError(
+                    parent.token.pos_start.fn, parent.token.pos_start.current_line,
+                    f"Class can't inherit from {parent.token.type.lower()}",
+                    parent.token.pos_start, parent.token.pos_end
+                ))
+
+            class_symbol_table = parent.symbol_table.copy()
+
+        for statement in node.statements:
+            res.register(self.visit(statement, class_symbol_table))
+            if res.error: return res
+        
+        symbol_table.assign(node.class_name.value, Class(node.class_name, class_symbol_table))
+        return res.success(GlobalSymbolTable.get_variable("Null"))
+
     def visit_CallNode(self, node:CallNode, symbol_table):
         res = RunTimeResult()
 
-        func:Function = res.register(self.visit(node.name, symbol_table))
+        func:Function|Class = res.register(self.visit(node.name, symbol_table))
         if res.error: return res
-        
-        if func.token.type != TT_FUNC:
+
+        if func.token.type not in (TT_FUNC, TT_CLASS):
             return res.failure(TypeError(
-                func.token.pos_start.fn, func.token.pos_start.current_line,
+                node.token.pos_start.fn, node.token.pos_start.current_line,
                 f"{func.token.type.lower()} is not callable",
-                func.token.pos_start, func.token.pos_end
+                node.token.pos_start, node.token.pos_end
             ))
 
         args = []
@@ -2136,9 +2398,27 @@ class Interpreter:
             arg = res.register(self.visit(expr, symbol_table))
             if res.error: return res
             args.append(arg)
-        
-        result = res.register(func.execute(args, symbol_table))
-        if res.error: return res
+
+        if func.token.type == TT_FUNC:
+            if node.cls:
+                cls = res.register(self.visit(node.cls, symbol_table))
+                if res.error: return res
+                args.insert(0, cls)
+
+            result = res.register(func.execute(args, symbol_table))
+            if res.error: return res
+
+        elif func.token.type == TT_CLASS:
+            if func.inizitialized:
+                return res.failure(TypeError(
+                    func.token.pos_start.fn, func.token.pos_start.current_line,
+                    f"{func.token.value} is not callable",
+                    func.token.pos_start, func.token.pos_end
+                ))
+            args.insert(0, func)
+
+            result = res.register(func.Initialize(args))
+            if res.error: return res
 
         return result
 
@@ -2246,6 +2526,40 @@ class Interpreter:
 
         char = res.register(value.index(index))
         return res.success(char)
+
+    def visit_AttributeNode(self, node:AttributeNode, symbol_table):
+        res = RunTimeResult()
+        class_:Class = res.register(self.visit(node.class_name, symbol_table))
+        value = class_.symbol_table.get_variable(node.attribute.value)
+
+        if not value:
+            return res.failure(AttributeError_(
+                class_.token.pos_start.fn, class_.token.pos_start.current_line,
+                f"{class_.token.value} has no attribute '{node.attribute.value}'",
+                class_.token.pos_start, class_.token.pos_end
+            ))
+        
+        return res.success(value)
+
+    def visit_AttributeAssignNode(self, node:AttributeAssignNode, symbol_table):
+        res = RunTimeResult()
+
+        class_:Class = res.register(self.visit(node.class_name, symbol_table))
+        if res.error: return res
+
+        if class_.token.type != TT_CLASS:
+            return res.failure(AttributeError_(
+                class_.token.pos_start.fn, class_.token.pos_start.current_line,
+                f"{class_.token.type.lower()} has no attribute '{node.attribute.value}'",
+                class_.token.pos_start, class_.token.pos_end
+            ))
+
+        value = res.register(self.visit(node.value, symbol_table))
+        if res.error: return res
+
+        class_.symbol_table.assign(node.attribute.value, value)
+
+        return res.success(GlobalSymbolTable.get_variable("Null"))
 
     def visit_VarNode(self, node:VarNode, symbol_table):
         res = RunTimeResult()
@@ -2361,7 +2675,10 @@ GlobalSymbolTable.assign_multiple(
     ("execute", Execute()),
     ("exit", Exit()),
     ("add_element", Add_Element()),
-    ("input", Input())
+    ("input", Input()),
+    ("read_file", ReadFile()),
+    ("write_file", WriteFile()),
+    ("read_to", ReadToFile())
 )
 
 def Main(input, fn):
