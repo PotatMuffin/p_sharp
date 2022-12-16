@@ -1,11 +1,11 @@
-statements  : NEWLINE* statement (NEWLINE+ statement)* NEWLINE*
+statements  : NEWLINE* statement (NEWLINE* statement)* NEWLINE*
 
 statement	: KEYWORD:return expr?
 			: KEYWORD:continue
 			: KEYWORD:break
 			: expr
 
-expr  	    : KEYWORD:var IDENTIFIER (EQ, PLUSEQ, MINEQ, MULEQ, DIVEQ, POWEQ) expr
+expr  	    : (KEYWORD:var|KEYWORD:global) IDENTIFIER (EQ, PLUSEQ, MINEQ, MULEQ, DIVEQ, POWEQ) expr
 			: comp-expr ((KEYWORD:and|KEYWORD:or) comp-expr)*
 
 comp-expr	: not comp-expr
@@ -39,7 +39,7 @@ if-expr		: KEYWORD:if expr KEYWORD:then statements
 
 while-expr  : KEYWORD:while expr KEYWORD:then statements KEYWORD:end
 
-for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER KEYWORD:in statements KEYWORD:then NEWLINE* statement* NEWLINE* KEYWORD:end
+for-expr	: KEYWORD:for KEYWORD:var IDENTIFIER KEYWORD:in statements KEYWORD:then statements KEYWORD:end
 
 class-expr	: KEYWORD:class IDENTIFIER (LPAREN IDENTIFIER RPAREN)? COLON statements
 

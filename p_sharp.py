@@ -431,9 +431,10 @@ class StrNode:
         return f"{self.token}"
 
 class VarAssignNode:
-    def __init__(self, var_name:Token, value) -> None:
+    def __init__(self, var_name:Token, value, Global=False) -> None:
         self.var_name = var_name
         self.value = value
+        self.Global = Global
 
     def __repr__(self) -> str:
         return f"({self.var_name} = {self.value})"
@@ -1121,17 +1122,19 @@ class Parser:
 
     def access_attribute(self, token, node=None):
         res = ParseResult()
+        n = node
 
         self.advance()
         attribute = self.current_token
         node = AttributeNode(node or VarNode(token), attribute)
+        if not n: n = node
 
         self.advance()
         if self.current_token.type == TT_LPAREN:
             node = res.register(self.call(token, node))
             if res.error: return res
-            node.cls = VarNode(token)
-        
+            node.cls = n if type(n) != AttributeNode else n.class_name
+
         if self.current_token.type == TT_DOT:
             node = res.register(self.access_attribute(token, node))
             if res.error: return res
@@ -1185,6 +1188,10 @@ class Parser:
         
         if self.current_token.type == TT_LPAREN:
             node = res.register(self.call(node.token, node))
+            if res.error: return res
+
+        if self.current_token.type == TT_DOT:
+            node = res.register(self.access_attribute(node.token, node))
             if res.error: return res
 
         return res.success(node)
@@ -1330,7 +1337,11 @@ class Parser:
 
     def expr(self):
         res = ParseResult()
-        if self.current_token.matches(TT_KEYWORD, 'var'):
+        if self.current_token.matches(TT_KEYWORD, 'var') or self.current_token.matches(TT_KEYWORD, 'global'):
+            Global=False
+
+            if self.current_token.matches(TT_KEYWORD, 'global'): Global = True
+
             self.advance()
 
             if self.current_token.type != TT_IDENTIFIER:
@@ -1359,12 +1370,12 @@ class Parser:
                 if res.error: return res
 
                 expr = BinOpNode(VarNode(var_name), BinOp, expr)
-                return res.success(VarAssignNode(var_name, expr))
+                return res.success(VarAssignNode(var_name, expr, Global))
 
             self.advance()
             expr = res.register(self.expr())
             if res.error: return res
-            return res.success(VarAssignNode(var_name, expr))
+            return res.success(VarAssignNode(var_name, expr, Global))
 
         node = res.register(self.Bin_Op(self.comp_expr, ((TT_KEYWORD, 'and'), (TT_KEYWORD, 'or'))))
         if res.error: return res
@@ -1898,18 +1909,19 @@ class Dictionary(Value):
         return res.success(Number(Token(type=TT_INT, value=len(self.token.value), pos_start=self.token.pos_start, pos_end=self.token.pos_end)))
 
 class Class(Value):
-    def __init__(self, token:Token, symbol_table:SymbolTable, init=False) -> None:
+    def __init__(self, token:Token, symbol_table:SymbolTable, init=False, parent=None) -> None:
         self.token = token
         self.symbol_table = symbol_table
         self.inizitialized = init
+        self.parent = parent
     
-    def Initialize(self, args:list):
+    def Initialize(self, args:list, symbol_table):
         res = RunTimeResult()
         self.inizitialized = True
 
         func:Function = self.symbol_table.get_variable("init")
         if func and func.token.type == TT_FUNC:
-            res.register(func.execute(args, self.symbol_table))
+            res.register(func.execute(args, SymbolTable(symbol_table)))
             if res.error: return res
 
         return res.success(Class(self.token, self.symbol_table.copy(), self.inizitialized))
@@ -2256,6 +2268,43 @@ class ReadToFile(BuiltInFunction):
         file = self.symbol_table.get_variable("fileToWrite")
         return write_file.execute([file, content], parent_symbol_table)
 
+class Super(BuiltInFunction):
+    def __init__(self) -> None:
+        super().__init__("<super>", [("class", None)])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        Class_:Class = self.symbol_table.get_variable("class")
+        if Class_.token.type != TT_CLASS:
+            return res.failure(TypeError(
+                Class_.token.pos_start.fn, Class_.token.pos_start.current_line,
+                f"{Class_.token.type.lower()} has no parent",
+                Class_.token.pos_start, Class_.token.pos_end
+            ))
+
+        if Class_.parent:
+            return res.success(Class_.parent)
+
+class Error_func(BuiltInFunction):
+    def __init__(self, type:Error) -> None:
+        self.type_ = type
+        super().__init__("<error>", [("details", None)])
+    
+    def execute(self, args, parent_symbol_table):
+        res = RunTimeResult()
+        res.register(super().execute(args, parent_symbol_table))
+        if res.error: return res
+
+        details = self.symbol_table.get_variable("details")
+        return res.failure(self.type_(
+            details.token.pos_start.fn, details.token.pos_start.current_line,
+            details.token.value,
+            details.token.pos_start, details.token.pos_end
+        ))
+
 #######################################
 # Interpreter
 #######################################
@@ -2357,8 +2406,9 @@ class Interpreter:
 
     def visit_ClassNode(self, node:ClassNode, symbol_table:SymbolTable):
         res = RunTimeResult()
-        class_symbol_table = SymbolTable(symbol_table)
+        class_symbol_table = SymbolTable()
 
+        parent = None
         if node.parent:
             parent = res.register(self.visit(node.parent, symbol_table))
             if res.error: return res
@@ -2372,11 +2422,12 @@ class Interpreter:
 
             class_symbol_table = parent.symbol_table.copy()
 
+        class_symbol_table.assign("Parent Table", symbol_table)
         for statement in node.statements:
             res.register(self.visit(statement, class_symbol_table))
             if res.error: return res
         
-        symbol_table.assign(node.class_name.value, Class(node.class_name, class_symbol_table))
+        symbol_table.assign(node.class_name.value, Class(node.class_name, class_symbol_table, parent=parent))
         return res.success(GlobalSymbolTable.get_variable("Null"))
 
     def visit_CallNode(self, node:CallNode, symbol_table):
@@ -2403,6 +2454,7 @@ class Interpreter:
             if node.cls:
                 cls = res.register(self.visit(node.cls, symbol_table))
                 if res.error: return res
+                symbol_table = cls.symbol_table.get_variable("Parent Table")
                 args.insert(0, cls)
 
             result = res.register(func.execute(args, symbol_table))
@@ -2417,7 +2469,8 @@ class Interpreter:
                 ))
             args.insert(0, func)
 
-            result = res.register(func.Initialize(args))
+            symbol_table = func.symbol_table.get_variable("Parent Table")
+            result = res.register(func.Initialize(args, symbol_table))
             if res.error: return res
 
         return result
@@ -2529,7 +2582,10 @@ class Interpreter:
 
     def visit_AttributeNode(self, node:AttributeNode, symbol_table):
         res = RunTimeResult()
+
         class_:Class = res.register(self.visit(node.class_name, symbol_table))
+        if res.error: return res
+        
         value = class_.symbol_table.get_variable(node.attribute.value)
 
         if not value:
@@ -2580,10 +2636,10 @@ class Interpreter:
     def visit_VarAssignNode(self, node:VarAssignNode, symbol_table):
         res = RunTimeResult()
         var_name = node.var_name.value
-        if type(node.value) not in Value.__subclasses__():
-            value = res.register(self.visit(node.value, symbol_table))
-            if res.error: return res
-        else: value = node.value
+        value = res.register(self.visit(node.value, symbol_table))
+        if res.error: return res
+
+        if node.Global: symbol_table = GlobalSymbolTable
 
         symbol_table.assign(var_name, value)
         return res.success(value)
@@ -2653,7 +2709,7 @@ class Interpreter:
 
 GlobalSymbolTable = SymbolTable()
 GlobalSymbolTable.add_keywords(
-    'var', 'def', 'class',
+    'var', 'global', 'def', 'class',
     'try', 'except', 'finally',
     'return', 'break', 'continue',
     'and', 'or', 'not', 
@@ -2678,7 +2734,12 @@ GlobalSymbolTable.assign_multiple(
     ("input", Input()),
     ("read_file", ReadFile()),
     ("write_file", WriteFile()),
-    ("read_to", ReadToFile())
+    ("read_to", ReadToFile()),
+    ("super", Super()),
+    ("_all_", Dictionary(Token(type= TT_DICT, value=GlobalSymbolTable.symbols))),
+    ("TypeError", Error_func(TypeError)), ("KeyError", Error_func(KeyError)), ("AttributeError", Error_func(AttributeError_)),
+    ("IndexError", Error_func(IndexError)), ("NameError", Error_func(NameError)), ("ValueError", Error_func(ValueError)),
+    ("ZeroDivisionError", Error_func(ZeroDivisionError)), ("InvalidSyntaxError", Error_func(InvalidSyntaxError)), ("IllegalCharError", Error_func(IllegalCharError))
 )
 
 def Main(input, fn):
